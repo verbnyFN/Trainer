@@ -1,0 +1,156 @@
+:root {
+  color: #172033;
+  background: #eef2f7;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+code,
+pre {
+  font: inherit;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.8fr) minmax(440px, 1.2fr);
+  gap: 1px;
+  min-height: 100vh;
+  background: #cfd7e3;
+}
+
+.problem,
+.solution {
+  background: #ffffff;
+}
+
+.problem {
+  padding: clamp(2rem, 5vw, 5rem);
+  line-height: 1.65;
+}
+
+.problem-state {
+  color: #66758b;
+}
+
+.problem-state h1 {
+  color: #172033;
+}
+
+.problem h1 {
+  margin: 0 0 1.5rem;
+  font-size: clamp(2.4rem, 5vw, 4rem);
+  letter-spacing: -0.05em;
+}
+
+.problem h2 {
+  margin: 2rem 0 0.4rem;
+  font-size: 1rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  color: #52627a;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.problem pre {
+  padding: 1.25rem;
+  overflow: auto;
+  border: 1px solid #dfe5ed;
+  border-radius: 0.6rem;
+  background: #f7f9fc;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  line-height: 1.5;
+}
+
+.solution {
+  display: grid;
+  grid-template-rows: auto minmax(420px, 1fr) auto;
+  min-height: 100vh;
+}
+
+.solution-header,
+.submission-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+}
+
+.solution-header h2,
+.submission-bar p {
+  margin: 0;
+}
+
+.solution-header span {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  color: #40516b;
+  background: #eef2f7;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.editor {
+  min-height: 420px;
+  overflow: hidden;
+  background: #1e1e1e;
+}
+
+.submission-bar {
+  border-top: 1px solid #dfe5ed;
+}
+
+.submission-bar p {
+  color: #66758b;
+}
+
+.submission-bar .accepted {
+  color: #16724b;
+  font-weight: 700;
+}
+
+button {
+  min-width: 7rem;
+  padding: 0.75rem 1.2rem;
+  border: 0;
+  border-radius: 0.55rem;
+  color: #ffffff;
+  background: #3157d5;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #2346bc;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 800px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .solution {
+    min-height: 650px;
+  }
+}
