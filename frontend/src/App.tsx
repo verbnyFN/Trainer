@@ -9,6 +9,16 @@ const starterCode = `a, b = map(int, input().split())
 print(a + b)
 `;
 
+const dateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "2-digit",
+});
+
+function formatDate(value: string) {
+  return dateFormatter.format(new Date(value)).replaceAll("/", ":");
+}
+
 type SubmissionResponse = {
   id?: number;
   error?: string;
@@ -82,7 +92,7 @@ export function App() {
   const [history, setHistory] = useState<SubmissionHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
-  const [view, setView] = useState<View>("problem");
+  const [view, setView] = useState<View>("profile");
   const [profile, setProfile] = useState<ProfileData>();
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string>();
@@ -196,6 +206,7 @@ export function App() {
         });
         if (response.ok) {
           setUser((await response.json()) as AuthUser);
+          setView("profile");
         } else if (response.status !== 401) {
           const result = (await response.json()) as ErrorResponse;
           setAuthError(result.error ?? "Authentication state could not be loaded");
@@ -219,7 +230,8 @@ export function App() {
     event.preventDefault();
     setAuthSubmitting(true);
     setAuthError(undefined);
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
 
     try {
       const response = await fetch(`/api/auth/${authMode}`, {
@@ -236,7 +248,8 @@ export function App() {
         throw new Error((result as ErrorResponse).error ?? "Authentication failed");
       }
       setUser(result as AuthUser);
-      event.currentTarget.reset();
+      setView("profile");
+      formElement.reset();
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Authentication failed");
     } finally {
@@ -311,47 +324,50 @@ export function App() {
     }
   }
 
-  return (
-    <div className="app-shell">
-      <header className="auth-bar" aria-label="Account">
-        <strong>Algorithm Trainer</strong>
-        {authLoading ? (
-          <span role="status">Checking session…</span>
-        ) : user !== undefined ? (
-          <div className="account-summary">
-            <span>
-              Signed in as <strong>{user.username}</strong>
-            </span>
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => setView(view === "problem" ? "profile" : "problem")}
-            >
-              {view === "problem" ? "Profile" : "Back to problem"}
-            </button>
-            <button type="button" className="secondary-button" onClick={logout} disabled={authSubmitting}>
-              {authSubmitting ? "Signing out…" : "Logout"}
-            </button>
-          </div>
-        ) : (
+  if (authLoading) {
+    return (
+      <main className="auth-page">
+        <section className="auth-card" role="status">
+          <p className="eyebrow">Algorithm Trainer</p>
+          <h1>Welcome</h1>
+          <p>Checking your session…</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (user === undefined) {
+    return (
+      <main className="auth-page">
+        <section className="auth-card" aria-labelledby="auth-title">
+          <p className="eyebrow">Algorithm Trainer</p>
+          <h1 id="auth-title">{authMode === "login" ? "Welcome back" : "Create your account"}</h1>
+          <p>
+            {authMode === "login"
+              ? "Sign in to continue learning and track your progress."
+              : "Register to save submissions and completed problems."}
+          </p>
           <form className="auth-form" onSubmit={authenticate}>
             <label>
-              <span className="visually-hidden">Username</span>
-              <input name="username" type="text" autoComplete="username" placeholder="Username" required />
+              Username
+              <input name="username" type="text" autoComplete="username" required />
             </label>
             <label>
-              <span className="visually-hidden">Password</span>
+              Password
               <input
                 name="password"
                 type="password"
                 autoComplete={authMode === "login" ? "current-password" : "new-password"}
-                placeholder="Password"
                 required
               />
             </label>
             <button type="submit" disabled={authSubmitting}>
               {authSubmitting ? "Please wait…" : authMode === "login" ? "Login" : "Register"}
             </button>
+          </form>
+          {authError !== undefined && <p className="auth-error" role="alert">{authError}</p>}
+          <div className="auth-switch">
+            <span>{authMode === "login" ? "New to Algorithm Trainer?" : "Already registered?"}</span>
             <button
               type="button"
               className="text-button"
@@ -360,14 +376,37 @@ export function App() {
                 setAuthError(undefined);
               }}
             >
-              {authMode === "login" ? "Create account" : "Use login"}
+              {authMode === "login" ? "Register" : "Back to login"}
             </button>
-          </form>
-        )}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="auth-bar" aria-label="Account">
+        <strong>Algorithm Trainer</strong>
+        <div className="account-summary">
+          <span>
+            Signed in as <strong>{user.username}</strong>
+          </span>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setView(view === "problem" ? "profile" : "problem")}
+          >
+            {view === "problem" ? "Profile" : "Open problem"}
+          </button>
+          <button type="button" className="secondary-button" onClick={logout} disabled={authSubmitting}>
+            {authSubmitting ? "Signing out…" : "Logout"}
+          </button>
+        </div>
         {authError !== undefined && <p className="auth-error" role="alert">{authError}</p>}
       </header>
 
-      {view === "profile" && user !== undefined ? (
+      {view === "profile" ? (
         <main className="profile-page">
           {profileLoading && profile === undefined ? (
             <p role="status">Loading profile…</p>
@@ -379,7 +418,7 @@ export function App() {
                 <p className="eyebrow">Profile</p>
                 <h1>{profile.user.username}</h1>
                 <p>
-                  Member since <time dateTime={profile.user.createdAt}>{new Date(profile.user.createdAt).toLocaleDateString()}</time>
+                  Member since <time dateTime={profile.user.createdAt}>{formatDate(profile.user.createdAt)}</time>
                 </p>
               </section>
 
@@ -401,7 +440,7 @@ export function App() {
                     {profile.completedProblems.map((completed) => (
                       <li key={completed.id}>
                         <div><strong>{completed.title}</strong><span>{completed.id}</span></div>
-                        <div><span>Completed</span><time dateTime={completed.completedAt}>{new Date(completed.completedAt).toLocaleDateString()}</time></div>
+                        <div><span>Completed</span><time dateTime={completed.completedAt}>{formatDate(completed.completedAt)}</time></div>
                       </li>
                     ))}
                   </ul>
@@ -465,7 +504,7 @@ export function App() {
                             </strong>
                             <span>{entry.language === "python" ? "Python 3" : entry.language}</span>
                           </div>
-                          <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
+                          <time dateTime={entry.createdAt}>{formatDate(entry.createdAt)}</time>
                         </li>
                       );
                     })}
