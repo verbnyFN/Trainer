@@ -68,6 +68,7 @@ POST /api/auth/register
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
+GET  /api/profile
 GET  /api/problems/:slug
 GET  /api/problems/:slug/submissions
 POST /api/submissions

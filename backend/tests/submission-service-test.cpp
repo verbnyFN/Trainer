@@ -90,6 +90,22 @@ public:
     }
     return std::vector<algorithm_trainer::SubmissionRecord>{};
   }
+
+  algorithm_trainer::UserProgressResult progress(std::int64_t user_id) override {
+    if (record.user_id != user_id) {
+      return algorithm_trainer::UserProgress{};
+    }
+    return algorithm_trainer::UserProgress{
+        .total_submissions = 1,
+        .accepted_submissions = record.verdict == algorithm_trainer::Verdict::accepted ? 1 : 0,
+        .completed_problems = record.verdict == algorithm_trainer::Verdict::accepted
+                                  ? std::vector<algorithm_trainer::CompletedProblem>{{
+                                        .problem_id = record.problem_id,
+                                        .completed_at = *record.completed_at,
+                                    }}
+                                  : std::vector<algorithm_trainer::CompletedProblem>{},
+    };
+  }
 };
 
 algorithm_trainer::SubmissionRequest valid_submission() {
@@ -206,6 +222,24 @@ TEST_CASE("SubmissionService retrieves history for one user and problem", "[subm
   CHECK(std::get<std::vector<algorithm_trainer::SubmissionRecord>>(matching).size() == 1);
   CHECK(std::get<std::vector<algorithm_trainer::SubmissionRecord>>(other_user).empty());
   CHECK(std::get<std::vector<algorithm_trainer::SubmissionRecord>>(other_problem).empty());
+}
+
+TEST_CASE("SubmissionService retrieves user progress", "[submission-service]") {
+  RecordingJudge judge;
+  RecordingRepository repository;
+  repository.record.user_id = 7;
+  repository.record.verdict = algorithm_trainer::Verdict::accepted;
+  repository.record.completed_at = "2026-01-01T00:00:01.000Z";
+  algorithm_trainer::SubmissionService service{judge, repository};
+
+  const auto result = service.progress(7);
+
+  REQUIRE(std::holds_alternative<algorithm_trainer::UserProgress>(result));
+  const auto &progress = std::get<algorithm_trainer::UserProgress>(result);
+  CHECK(progress.total_submissions == 1);
+  CHECK(progress.accepted_submissions == 1);
+  REQUIRE(progress.completed_problems.size() == 1);
+  CHECK(progress.completed_problems.front().problem_id == "a-plus-b");
 }
 
 TEST_CASE("invalid submissions never reach persistence or judging", "[submission-service]") {

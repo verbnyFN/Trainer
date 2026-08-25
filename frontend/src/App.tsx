@@ -52,6 +52,21 @@ type AuthUser = {
 };
 
 type AuthMode = "login" | "register";
+type View = "problem" | "profile";
+
+type ProfileData = {
+  user: AuthUser;
+  activity: {
+    totalSubmissions: number;
+    acceptedSubmissions: number;
+    completedProblems: number;
+  };
+  completedProblems: Array<{
+    id: string;
+    title: string;
+    completedAt: string;
+  }>;
+};
 
 export function App() {
   const [code, setCode] = useState(starterCode);
@@ -67,6 +82,10 @@ export function App() {
   const [history, setHistory] = useState<SubmissionHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
+  const [view, setView] = useState<View>("problem");
+  const [profile, setProfile] = useState<ProfileData>();
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string>();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -95,6 +114,40 @@ export function App() {
     void loadProblem();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (view !== "profile" || user === undefined) {
+      return () => controller.abort();
+    }
+
+    async function loadProfile() {
+      setProfileLoading(true);
+      setProfileError(undefined);
+      try {
+        const response = await fetch("/api/profile", {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        const result = (await response.json()) as ProfileData | ErrorResponse;
+        if (!response.ok) {
+          throw new Error((result as ErrorResponse).error ?? "Profile could not be loaded");
+        }
+        setProfile(result as ProfileData);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setProfileError(error instanceof Error ? error.message : "Profile could not be loaded");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setProfileLoading(false);
+        }
+      }
+    }
+
+    void loadProfile();
+    return () => controller.abort();
+  }, [user, view]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -204,6 +257,8 @@ export function App() {
         throw new Error(result.error ?? "Logout failed");
       }
       setUser(undefined);
+      setProfile(undefined);
+      setView("problem");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Logout failed");
     } finally {
@@ -267,6 +322,13 @@ export function App() {
             <span>
               Signed in as <strong>{user.username}</strong>
             </span>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setView(view === "problem" ? "profile" : "problem")}
+            >
+              {view === "problem" ? "Profile" : "Back to problem"}
+            </button>
             <button type="button" className="secondary-button" onClick={logout} disabled={authSubmitting}>
               {authSubmitting ? "Signing out…" : "Logout"}
             </button>
@@ -305,6 +367,50 @@ export function App() {
         {authError !== undefined && <p className="auth-error" role="alert">{authError}</p>}
       </header>
 
+      {view === "profile" && user !== undefined ? (
+        <main className="profile-page">
+          {profileLoading && profile === undefined ? (
+            <p role="status">Loading profile…</p>
+          ) : profileError !== undefined ? (
+            <p className="profile-error" role="alert">{profileError}</p>
+          ) : profile !== undefined ? (
+            <>
+              <section className="profile-heading">
+                <p className="eyebrow">Profile</p>
+                <h1>{profile.user.username}</h1>
+                <p>
+                  Member since <time dateTime={profile.user.createdAt}>{new Date(profile.user.createdAt).toLocaleDateString()}</time>
+                </p>
+              </section>
+
+              <section aria-labelledby="activity-title">
+                <h2 id="activity-title">Activity overview</h2>
+                <dl className="activity-grid">
+                  <div><dt>Submissions</dt><dd>{profile.activity.totalSubmissions}</dd></div>
+                  <div><dt>Accepted</dt><dd>{profile.activity.acceptedSubmissions}</dd></div>
+                  <div><dt>Problems completed</dt><dd>{profile.activity.completedProblems}</dd></div>
+                </dl>
+              </section>
+
+              <section aria-labelledby="completed-title">
+                <h2 id="completed-title">Completed problems</h2>
+                {profile.completedProblems.length === 0 ? (
+                  <p className="profile-empty">No completed problems yet. Your first accepted solution will appear here.</p>
+                ) : (
+                  <ul className="completed-list">
+                    {profile.completedProblems.map((completed) => (
+                      <li key={completed.id}>
+                        <div><strong>{completed.title}</strong><span>{completed.id}</span></div>
+                        <div><span>Completed</span><time dateTime={completed.completedAt}>{new Date(completed.completedAt).toLocaleDateString()}</time></div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </>
+          ) : null}
+        </main>
+      ) : (
       <main className="workspace">
       <section className="problem" aria-labelledby="problem-title">
         {problem === undefined ? (
@@ -413,6 +519,7 @@ export function App() {
         </footer>
       </section>
       </main>
+      )}
     </div>
   );
 }

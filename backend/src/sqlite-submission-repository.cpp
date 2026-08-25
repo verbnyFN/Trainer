@@ -362,4 +362,43 @@ SubmissionHistoryResult SQLiteSubmissionRepository::history(std::int64_t user_id
   }
 }
 
+UserProgressResult SQLiteSubmissionRepository::progress(std::int64_t user_id) {
+  Statement totals{implementation_->database,
+                   "SELECT COUNT(*), COUNT(CASE WHEN verdict = 'Accepted' THEN 1 END) "
+                   "FROM submissions WHERE user_id = ?;"};
+  if (!totals.valid()) {
+    return RepositoryError{totals.error()};
+  }
+  sqlite3_bind_int64(totals.get(), 1, user_id);
+  if (sqlite3_step(totals.get()) != SQLITE_ROW) {
+    return database_error(implementation_->database, "Could not retrieve user activity");
+  }
+
+  UserProgress progress{
+      .total_submissions = sqlite3_column_int64(totals.get(), 0),
+      .accepted_submissions = sqlite3_column_int64(totals.get(), 1),
+  };
+  Statement completed{implementation_->database,
+                      "SELECT problem_id, MIN(completed_at) FROM submissions "
+                      "WHERE user_id = ? AND verdict = 'Accepted' AND completed_at IS NOT NULL "
+                      "GROUP BY problem_id ORDER BY MIN(completed_at) DESC;"};
+  if (!completed.valid()) {
+    return RepositoryError{completed.error()};
+  }
+  sqlite3_bind_int64(completed.get(), 1, user_id);
+  while (true) {
+    const auto result = sqlite3_step(completed.get());
+    if (result == SQLITE_DONE) {
+      return progress;
+    }
+    if (result != SQLITE_ROW) {
+      return database_error(implementation_->database, "Could not retrieve completed problems");
+    }
+    progress.completed_problems.push_back({
+        .problem_id = column_text(completed.get(), 0),
+        .completed_at = column_text(completed.get(), 1),
+    });
+  }
+}
+
 } // namespace algorithm_trainer

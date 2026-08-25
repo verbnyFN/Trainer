@@ -19,6 +19,7 @@ struct RepositoryError {
 using StoreSubmissionResult = std::variant<SubmissionRecord, RepositoryError>;
 using FindSubmissionResult = std::variant<std::optional<SubmissionRecord>, RepositoryError>;
 using SubmissionHistoryResult = std::variant<std::vector<SubmissionRecord>, RepositoryError>;
+using UserProgressResult = std::variant<UserProgress, RepositoryError>;
 
 class SubmissionRepository {
 public:
@@ -29,6 +30,7 @@ public:
   virtual StoreSubmissionResult fail(SubmissionId submission_id) = 0;
   virtual FindSubmissionResult find(SubmissionId submission_id) = 0;
   virtual SubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id) = 0;
+  virtual UserProgressResult progress(std::int64_t user_id) = 0;
 };
 
 } // namespace algorithm_trainer

@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace algorithm_trainer {
 
@@ -29,6 +30,17 @@ struct SubmissionRecord {
   std::string created_at;
   std::optional<std::string> completed_at;
   std::optional<std::int64_t> user_id;
+};
+
+struct CompletedProblem {
+  std::string problem_id;
+  std::string completed_at;
+};
+
+struct UserProgress {
+  std::int64_t total_submissions{};
+  std::int64_t accepted_submissions{};
+  std::vector<CompletedProblem> completed_problems;
 };
 
 } // namespace algorithm_trainer

@@ -194,3 +194,48 @@ TEST_CASE("SQLite submission history is isolated by user and problem", "[sqlite]
   CHECK(records.front().source_code == "print('first')");
   CHECK(records.front().user_id == first_user);
 }
+
+TEST_CASE("SQLite derives user progress from accepted submissions", "[sqlite]") {
+  TemporaryDirectory directory;
+  auto auth_result = algorithm_trainer::AuthService::open(directory.database());
+  REQUIRE(std::holds_alternative<std::unique_ptr<algorithm_trainer::AuthService>>(auth_result));
+  auto auth_service =
+      std::get<std::unique_ptr<algorithm_trainer::AuthService>>(std::move(auth_result));
+  const auto registration = auth_service->register_user("profile-user", "password-one");
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(registration));
+  const auto user_id = std::get<algorithm_trainer::AuthSession>(registration).user.id;
+  auto repository = open_repository(directory.database());
+
+  auto first = submission("print('accepted once')");
+  first.user_id = user_id;
+  auto second = submission("print('accepted twice')");
+  second.user_id = user_id;
+  auto wrong = submission("print('wrong')");
+  wrong.user_id = user_id;
+  auto other_problem = submission("print('other')");
+  other_problem.problem_id = "other-problem";
+  other_problem.user_id = user_id;
+  const auto first_record = stored_record(repository->create(first));
+  const auto second_record = stored_record(repository->create(second));
+  const auto wrong_record = stored_record(repository->create(wrong));
+  const auto other_record = stored_record(repository->create(other_problem));
+  static_cast<void>(
+      stored_record(repository->complete(first_record.id, algorithm_trainer::Verdict::accepted)));
+  static_cast<void>(
+      stored_record(repository->complete(second_record.id, algorithm_trainer::Verdict::accepted)));
+  static_cast<void>(stored_record(
+      repository->complete(wrong_record.id, algorithm_trainer::Verdict::wrong_answer)));
+  static_cast<void>(
+      stored_record(repository->complete(other_record.id, algorithm_trainer::Verdict::accepted)));
+
+  const auto result = repository->progress(user_id);
+
+  REQUIRE(std::holds_alternative<algorithm_trainer::UserProgress>(result));
+  const auto &progress = std::get<algorithm_trainer::UserProgress>(result);
+  CHECK(progress.total_submissions == 4);
+  CHECK(progress.accepted_submissions == 3);
+  REQUIRE(progress.completed_problems.size() == 2);
+  CHECK(std::ranges::any_of(progress.completed_problems, [](const auto &completed) {
+    return completed.problem_id == "a-plus-b";
+  }));
+}

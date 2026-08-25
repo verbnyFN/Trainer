@@ -255,6 +255,50 @@ void submission_history(const drogon::HttpRequestPtr &request, ResponseCallback 
   callback(drogon::HttpResponse::newHttpJsonResponse(body));
 }
 
+void profile(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
+             algorithm_trainer::SubmissionService &submission_service,
+             algorithm_trainer::AuthService &auth_service) {
+  auto authenticated =
+      auth_service.current_user(request->getCookie(std::string{session_cookie_name}));
+  if (const auto *error = std::get_if<algorithm_trainer::AuthError>(&authenticated)) {
+    if (error->code == algorithm_trainer::AuthErrorCode::internal) {
+      LOG_ERROR << "Profile authentication failed: " << error->message;
+      callback(
+          error_response("Authentication service is unavailable", drogon::k500InternalServerError));
+    } else {
+      callback(error_response("Authentication required", drogon::k401Unauthorized));
+    }
+    return;
+  }
+
+  const auto &user = std::get<algorithm_trainer::AuthUser>(authenticated);
+  auto progress_result = submission_service.progress(user.id);
+  if (const auto *error =
+          std::get_if<algorithm_trainer::SubmissionServiceError>(&progress_result)) {
+    LOG_ERROR << "Profile progress lookup failed: " << error->message;
+    callback(error_response("Profile could not be retrieved", drogon::k500InternalServerError));
+    return;
+  }
+  const auto &progress = std::get<algorithm_trainer::UserProgress>(progress_result);
+
+  Json::Value body;
+  body["user"] = user_to_json(user);
+  body["activity"]["totalSubmissions"] = Json::Int64{progress.total_submissions};
+  body["activity"]["acceptedSubmissions"] = Json::Int64{progress.accepted_submissions};
+  body["activity"]["completedProblems"] =
+      Json::Int64{static_cast<std::int64_t>(progress.completed_problems.size())};
+  body["completedProblems"] = Json::Value{Json::arrayValue};
+  for (const auto &completed : progress.completed_problems) {
+    Json::Value item;
+    item["id"] = completed.problem_id;
+    const auto *problem = algorithm_trainer::find_problem(completed.problem_id);
+    item["title"] = problem == nullptr ? completed.problem_id : problem->title;
+    item["completedAt"] = completed.completed_at;
+    body["completedProblems"].append(std::move(item));
+  }
+  callback(drogon::HttpResponse::newHttpJsonResponse(body));
+}
+
 void get_submission(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
                     const std::string &raw_id,
                     algorithm_trainer::SubmissionService &submission_service) {
@@ -347,6 +391,12 @@ int main() {
             current_user(request, std::move(callback), *auth_service);
           },
           {drogon::Get})
+      .registerHandler("/api/profile",
+                       [&submission_service, &auth_service](const drogon::HttpRequestPtr &request,
+                                                            ResponseCallback &&callback) {
+                         profile(request, std::move(callback), submission_service, *auth_service);
+                       },
+                       {drogon::Get})
       .registerHandler(
           "/api/problems/{1}",
           [](const drogon::HttpRequestPtr &request, ResponseCallback &&callback,

@@ -55,4 +55,12 @@ GetSubmissionHistoryResult SubmissionService::history(std::int64_t user_id,
   return std::get<std::vector<SubmissionRecord>>(std::move(result));
 }
 
+GetUserProgressResult SubmissionService::progress(std::int64_t user_id) {
+  auto result = repository_.progress(user_id);
+  if (const auto *error = std::get_if<RepositoryError>(&result)) {
+    return SubmissionServiceError{error->message};
+  }
+  return std::get<UserProgress>(std::move(result));
+}
+
 } // namespace algorithm_trainer
