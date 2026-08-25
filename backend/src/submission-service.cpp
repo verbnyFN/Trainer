@@ -46,4 +46,13 @@ GetSubmissionResult SubmissionService::find(SubmissionId submission_id) {
   return std::get<std::optional<SubmissionRecord>>(std::move(result));
 }
 
+GetSubmissionHistoryResult SubmissionService::history(std::int64_t user_id,
+                                                      const std::string &problem_id) {
+  auto result = repository_.history(user_id, problem_id);
+  if (const auto *error = std::get_if<RepositoryError>(&result)) {
+    return SubmissionServiceError{error->message};
+  }
+  return std::get<std::vector<SubmissionRecord>>(std::move(result));
+}
+
 } // namespace algorithm_trainer

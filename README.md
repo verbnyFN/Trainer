@@ -69,6 +69,7 @@ POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
 GET  /api/problems/:slug
+GET  /api/problems/:slug/submissions
 POST /api/submissions
 GET  /api/submissions/:id
 ```
@@ -98,6 +99,7 @@ environment, networking, processes, memory, CPU, wall time, and output. See
 
 ## Current scope
 
-The MVP supports one problem, Python submissions, and username/password authentication. Judging is
-synchronous. Profiles, password recovery, OAuth, queues, additional languages, and distributed
-execution are intentionally outside the current scope.
+The MVP supports one problem, Python submissions, username/password authentication, and per-problem
+submission history for authenticated users. Judging is synchronous. Profiles, password recovery,
+OAuth, queues, additional languages, and distributed execution are intentionally outside the
+current scope.

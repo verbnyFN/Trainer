@@ -4,9 +4,11 @@
 #include "algorithm-trainer/submission-record.h"
 #include "algorithm-trainer/submission.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace algorithm_trainer {
 
@@ -16,6 +18,7 @@ struct RepositoryError {
 
 using StoreSubmissionResult = std::variant<SubmissionRecord, RepositoryError>;
 using FindSubmissionResult = std::variant<std::optional<SubmissionRecord>, RepositoryError>;
+using SubmissionHistoryResult = std::variant<std::vector<SubmissionRecord>, RepositoryError>;
 
 class SubmissionRepository {
 public:
@@ -25,6 +28,7 @@ public:
   virtual StoreSubmissionResult complete(SubmissionId submission_id, Verdict verdict) = 0;
   virtual StoreSubmissionResult fail(SubmissionId submission_id) = 0;
   virtual FindSubmissionResult find(SubmissionId submission_id) = 0;
+  virtual SubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id) = 0;
 };
 
 } // namespace algorithm_trainer

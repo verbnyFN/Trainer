@@ -158,6 +158,49 @@ pre {
   line-height: 1.5;
 }
 
+.history {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid #dfe5ed;
+}
+
+.history-list {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0;
+  list-style: none;
+}
+
+.history-list li,
+.history-list li div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.history-list li {
+  padding: 0.8rem;
+  border: 1px solid #dfe5ed;
+  border-radius: 0.55rem;
+  background: #f7f9fc;
+}
+
+.history-list span,
+.history-list time {
+  color: #66758b;
+  font-size: 0.82rem;
+}
+
+.history-success {
+  color: #16724b;
+}
+
+.history-failure,
+.history-error {
+  color: #9b1c1c;
+}
+
 .solution {
   display: grid;
   grid-template-rows: auto minmax(420px, 1fr) auto;

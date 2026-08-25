@@ -10,9 +10,20 @@ print(a + b)
 `;
 
 type SubmissionResponse = {
+  id?: number;
   error?: string;
   status?: string;
   verdict?: string;
+  language?: string;
+  createdAt?: string;
+};
+
+type SubmissionHistoryEntry = {
+  id: number;
+  language: string;
+  status: string;
+  verdict?: string;
+  createdAt: string;
 };
 
 type ProblemExample = {
@@ -53,6 +64,9 @@ export function App() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string>();
   const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [history, setHistory] = useState<SubmissionHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string>();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -81,6 +95,42 @@ export function App() {
     void loadProblem();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (user === undefined || problem === undefined) {
+      setHistory([]);
+      setHistoryError(undefined);
+      return () => controller.abort();
+    }
+
+    async function loadHistory() {
+      setHistoryLoading(true);
+      setHistoryError(undefined);
+      try {
+        const response = await fetch(`/api/problems/${problem!.id}/submissions`, {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        const result = (await response.json()) as SubmissionHistoryEntry[] | ErrorResponse;
+        if (!response.ok) {
+          throw new Error((result as ErrorResponse).error ?? "Submission history could not be loaded");
+        }
+        setHistory(result as SubmissionHistoryEntry[]);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setHistoryError(error instanceof Error ? error.message : "Submission history could not be loaded");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+
+    void loadHistory();
+    return () => controller.abort();
+  }, [problem, user]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -187,6 +237,18 @@ export function App() {
       }
 
       setMessage(result.verdict ?? "Submission completed");
+      if (user !== undefined && result.id !== undefined && result.language !== undefined && result.createdAt !== undefined) {
+        setHistory((current) => [
+          {
+            id: result.id!,
+            language: result.language!,
+            status: result.status ?? "completed",
+            verdict: result.verdict,
+            createdAt: result.createdAt!,
+          },
+          ...current.filter((entry) => entry.id !== result.id),
+        ]);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Submission failed");
     } finally {
@@ -275,6 +337,36 @@ export function App() {
                 </pre>
               </div>
             ))}
+
+            {user !== undefined && (
+              <section className="history" aria-labelledby="history-title">
+                <h2 id="history-title">Your submission history</h2>
+                {historyLoading ? (
+                  <p role="status">Loading history…</p>
+                ) : historyError !== undefined ? (
+                  <p className="history-error" role="alert">{historyError}</p>
+                ) : history.length === 0 ? (
+                  <p>No submissions for this problem yet.</p>
+                ) : (
+                  <ul className="history-list">
+                    {history.map((entry) => {
+                      const result = entry.verdict ?? (entry.status === "failed" ? "Judge Error" : "Pending");
+                      return (
+                        <li key={entry.id}>
+                          <div>
+                            <strong className={result === "Accepted" ? "history-success" : "history-failure"}>
+                              {result}
+                            </strong>
+                            <span>{entry.language === "python" ? "Python 3" : entry.language}</span>
+                          </div>
+                          <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+            )}
           </>
         )}
       </section>

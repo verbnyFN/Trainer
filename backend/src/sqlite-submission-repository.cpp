@@ -14,11 +14,11 @@
 #include <system_error>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace algorithm_trainer {
 namespace {
 
-constexpr int migration_version{1};
 constexpr int busy_timeout_milliseconds{5000};
 constexpr int id_column{0};
 constexpr int problem_id_column{1};
@@ -28,6 +28,7 @@ constexpr int status_column{4};
 constexpr int verdict_column{5};
 constexpr int created_at_column{6};
 constexpr int completed_at_column{7};
+constexpr int user_id_column{8};
 
 class Statement {
 public:
@@ -65,9 +66,8 @@ std::optional<RepositoryError> execute(sqlite3 *database, std::string_view sql) 
   return RepositoryError{"SQLite operation failed: " + detail};
 }
 
-std::variant<std::string, RepositoryError> read_migration() {
-  const auto path =
-      std::filesystem::path{ALGORITHM_TRAINER_MIGRATIONS_DIR} / "001-create-submissions.sql";
+std::variant<std::string, RepositoryError> read_migration(std::string_view file_name) {
+  const auto path = std::filesystem::path{ALGORITHM_TRAINER_MIGRATIONS_DIR} / file_name;
   std::ifstream input{path};
   if (!input) {
     return RepositoryError{"Submission migration file is unavailable"};
@@ -75,7 +75,8 @@ std::variant<std::string, RepositoryError> read_migration() {
   return std::string{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
 
-std::optional<RepositoryError> apply_migration(sqlite3 *database) {
+std::optional<RepositoryError> apply_migration(sqlite3 *database, int version,
+                                               std::string_view file_name) {
   if (const auto error =
           execute(database,
                   "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);")) {
@@ -86,12 +87,12 @@ std::optional<RepositoryError> apply_migration(sqlite3 *database) {
   if (!check.valid()) {
     return RepositoryError{check.error()};
   }
-  sqlite3_bind_int(check.get(), 1, migration_version);
+  sqlite3_bind_int(check.get(), 1, version);
   if (sqlite3_step(check.get()) == SQLITE_ROW) {
     return std::nullopt;
   }
 
-  auto migration = read_migration();
+  auto migration = read_migration(file_name);
   if (const auto *error = std::get_if<RepositoryError>(&migration)) {
     return *error;
   }
@@ -109,7 +110,7 @@ std::optional<RepositoryError> apply_migration(sqlite3 *database) {
     static_cast<void>(execute(database, "ROLLBACK;"));
     return RepositoryError{record.error()};
   }
-  sqlite3_bind_int(record.get(), 1, migration_version);
+  sqlite3_bind_int(record.get(), 1, version);
   if (sqlite3_step(record.get()) != SQLITE_DONE) {
     auto error = database_error(database, "Could not record migration");
     static_cast<void>(execute(database, "ROLLBACK;"));
@@ -188,11 +189,14 @@ std::variant<SubmissionRecord, RepositoryError> read_record(sqlite3_stmt *statem
       .verdict = verdict,
       .created_at = column_text(statement, created_at_column),
       .completed_at = std::move(completed_at),
+      .user_id = sqlite3_column_type(statement, user_id_column) == SQLITE_NULL
+                     ? std::nullopt
+                     : std::optional<std::int64_t>{sqlite3_column_int64(statement, user_id_column)},
   };
 }
 
 constexpr std::string_view returned_columns{
-    "id, problem_id, language, source_code, status, verdict, created_at, completed_at"};
+    "id, problem_id, language, source_code, status, verdict, created_at, completed_at, user_id"};
 
 } // namespace
 
@@ -235,7 +239,13 @@ SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
   if (const auto error = execute(database, "PRAGMA foreign_keys = ON;")) {
     return *error;
   }
-  if (const auto error = apply_migration(database)) {
+  if (const auto error = apply_migration(database, 1, "001-create-submissions.sql")) {
+    return *error;
+  }
+  if (const auto error = apply_migration(database, 2, "002-create-auth.sql")) {
+    return *error;
+  }
+  if (const auto error = apply_migration(database, 3, "003-link-submissions-to-users.sql")) {
     return *error;
   }
   return std::unique_ptr<SQLiteSubmissionRepository>{
@@ -243,8 +253,9 @@ SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
 }
 
 StoreSubmissionResult SQLiteSubmissionRepository::create(const SubmissionRequest &request) {
-  const auto sql = "INSERT INTO submissions(problem_id, language, source_code, status, created_at) "
-                   "VALUES (?, ?, ?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) "
+  const auto sql = "INSERT INTO submissions(problem_id, language, source_code, status, created_at, "
+                   "user_id) VALUES (?, ?, ?, 'pending', "
+                   "strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?) "
                    "RETURNING " +
                    std::string{returned_columns} + ';';
   Statement statement{implementation_->database, sql};
@@ -254,6 +265,11 @@ StoreSubmissionResult SQLiteSubmissionRepository::create(const SubmissionRequest
   bind_text(statement.get(), 1, request.problem_id);
   bind_text(statement.get(), 2, request.language);
   bind_text(statement.get(), 3, request.code);
+  if (request.user_id) {
+    sqlite3_bind_int64(statement.get(), 4, *request.user_id);
+  } else {
+    sqlite3_bind_null(statement.get(), 4);
+  }
   if (sqlite3_step(statement.get()) != SQLITE_ROW) {
     return database_error(implementation_->database, "Could not create submission");
   }
@@ -315,6 +331,35 @@ FindSubmissionResult SQLiteSubmissionRepository::find(SubmissionId submission_id
     return *error;
   }
   return std::optional<SubmissionRecord>{std::get<SubmissionRecord>(std::move(record))};
+}
+
+SubmissionHistoryResult SQLiteSubmissionRepository::history(std::int64_t user_id,
+                                                            const std::string &problem_id) {
+  const auto sql = "SELECT " + std::string{returned_columns} +
+                   " FROM submissions WHERE user_id = ? AND problem_id = ? "
+                   "ORDER BY created_at DESC, id DESC;";
+  Statement statement{implementation_->database, sql};
+  if (!statement.valid()) {
+    return RepositoryError{statement.error()};
+  }
+  sqlite3_bind_int64(statement.get(), 1, user_id);
+  bind_text(statement.get(), 2, problem_id);
+
+  std::vector<SubmissionRecord> records;
+  while (true) {
+    const auto result = sqlite3_step(statement.get());
+    if (result == SQLITE_DONE) {
+      return records;
+    }
+    if (result != SQLITE_ROW) {
+      return database_error(implementation_->database, "Could not retrieve submission history");
+    }
+    auto record = read_record(statement.get());
+    if (const auto *error = std::get_if<RepositoryError>(&record)) {
+      return *error;
+    }
+    records.push_back(std::get<SubmissionRecord>(std::move(record)));
+  }
 }
 
 } // namespace algorithm_trainer

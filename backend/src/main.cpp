@@ -19,6 +19,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -167,7 +168,8 @@ void get_problem(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
 }
 
 void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-            algorithm_trainer::SubmissionService &submission_service) {
+            algorithm_trainer::SubmissionService &submission_service,
+            algorithm_trainer::AuthService &auth_service) {
   const auto json = request->getJsonObject();
   if (json == nullptr) {
     Json::Value body;
@@ -188,8 +190,20 @@ void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
     return;
   }
 
-  auto result =
-      submission_service.submit(std::get<algorithm_trainer::SubmissionRequest>(validation));
+  auto submission = std::get<algorithm_trainer::SubmissionRequest>(validation);
+  const auto token = request->getCookie(std::string{session_cookie_name});
+  if (!token.empty()) {
+    auto user = auth_service.current_user(token);
+    if (const auto *authenticated = std::get_if<algorithm_trainer::AuthUser>(&user)) {
+      submission.user_id = authenticated->id;
+    } else if (std::get<algorithm_trainer::AuthError>(user).code ==
+               algorithm_trainer::AuthErrorCode::internal) {
+      LOG_ERROR << "Could not resolve submission owner";
+      callback(error_response("Submission could not be accepted", drogon::k500InternalServerError));
+      return;
+    }
+  }
+  auto result = submission_service.submit(submission);
   if (const auto *submission = std::get_if<algorithm_trainer::SubmissionRecord>(&result)) {
     callback(drogon::HttpResponse::newHttpJsonResponse(submission_to_json(*submission, false)));
     return;
@@ -203,6 +217,42 @@ void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
   auto response = drogon::HttpResponse::newHttpJsonResponse(body);
   response->setStatusCode(drogon::k500InternalServerError);
   callback(response);
+}
+
+void submission_history(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
+                        const std::string &problem_id,
+                        algorithm_trainer::SubmissionService &submission_service,
+                        algorithm_trainer::AuthService &auth_service) {
+  if (algorithm_trainer::find_problem(problem_id) == nullptr) {
+    callback(error_response("Problem not found", drogon::k404NotFound));
+    return;
+  }
+  auto authenticated =
+      auth_service.current_user(request->getCookie(std::string{session_cookie_name}));
+  if (const auto *error = std::get_if<algorithm_trainer::AuthError>(&authenticated)) {
+    if (error->code == algorithm_trainer::AuthErrorCode::internal) {
+      LOG_ERROR << "Submission history authentication failed: " << error->message;
+      callback(
+          error_response("Authentication service is unavailable", drogon::k500InternalServerError));
+    } else {
+      callback(error_response("Authentication required", drogon::k401Unauthorized));
+    }
+    return;
+  }
+
+  auto history = submission_service.history(std::get<algorithm_trainer::AuthUser>(authenticated).id,
+                                            problem_id);
+  if (const auto *error = std::get_if<algorithm_trainer::SubmissionServiceError>(&history)) {
+    LOG_ERROR << "Submission history lookup failed: " << error->message;
+    callback(error_response("Submission history could not be retrieved",
+                            drogon::k500InternalServerError));
+    return;
+  }
+  Json::Value body{Json::arrayValue};
+  for (const auto &record : std::get<std::vector<algorithm_trainer::SubmissionRecord>>(history)) {
+    body.append(submission_to_json(record, false));
+  }
+  callback(drogon::HttpResponse::newHttpJsonResponse(body));
 }
 
 void get_submission(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
@@ -302,6 +352,14 @@ int main() {
           [](const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
              const std::string &slug) { get_problem(request, std::move(callback), slug); },
           {drogon::Get})
+      .registerHandler("/api/problems/{1}/submissions",
+                       [&submission_service, &auth_service](const drogon::HttpRequestPtr &request,
+                                                            ResponseCallback &&callback,
+                                                            const std::string &problem_id) {
+                         submission_history(request, std::move(callback), problem_id,
+                                            submission_service, *auth_service);
+                       },
+                       {drogon::Get})
       .registerHandler("/api/submissions/{1}",
                        [&submission_service](const drogon::HttpRequestPtr &request,
                                              ResponseCallback &&callback, const std::string &id) {
@@ -309,9 +367,9 @@ int main() {
                        },
                        {drogon::Get})
       .registerHandler("/api/submissions",
-                       [&submission_service](const drogon::HttpRequestPtr &request,
-                                             ResponseCallback &&callback) {
-                         submit(request, std::move(callback), submission_service);
+                       [&submission_service, &auth_service](const drogon::HttpRequestPtr &request,
+                                                            ResponseCallback &&callback) {
+                         submit(request, std::move(callback), submission_service, *auth_service);
                        },
                        {drogon::Post})
       .addListener("127.0.0.1", port)

@@ -190,6 +190,13 @@ AuthService::OpenResult AuthService::open(const std::filesystem::path &database_
   if (sodium_init() < 0) {
     return internal_error("Cryptographic library initialization failed");
   }
+  if (database_path != ":memory:" && database_path.has_parent_path()) {
+    std::error_code error;
+    std::filesystem::create_directories(database_path.parent_path(), error);
+    if (error) {
+      return internal_error("Could not create database directory: " + error.message());
+    }
+  }
   sqlite3 *database{};
   const auto result =
       sqlite3_open_v2(database_path.c_str(), &database,

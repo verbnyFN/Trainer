@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace algorithm_trainer {
 
@@ -17,6 +18,8 @@ struct SubmissionServiceError {
 
 using SubmitResult = std::variant<SubmissionRecord, SubmissionServiceError>;
 using GetSubmissionResult = std::variant<std::optional<SubmissionRecord>, SubmissionServiceError>;
+using GetSubmissionHistoryResult =
+    std::variant<std::vector<SubmissionRecord>, SubmissionServiceError>;
 
 class SubmissionService {
 public:
@@ -24,6 +27,7 @@ public:
 
   SubmitResult submit(const SubmissionRequest &submission);
   GetSubmissionResult find(SubmissionId submission_id);
+  GetSubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id);
 
 private:
   Judge &judge_;

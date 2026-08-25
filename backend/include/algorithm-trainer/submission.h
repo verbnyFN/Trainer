@@ -2,6 +2,8 @@
 
 #include <json/value.h>
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -11,6 +13,7 @@ struct SubmissionRequest {
   std::string problem_id;
   std::string language;
   std::string code;
+  std::optional<std::int64_t> user_id;
 };
 
 struct ValidationError {

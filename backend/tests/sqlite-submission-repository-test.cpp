@@ -1,3 +1,4 @@
+#include "algorithm-trainer/auth-service.h"
 #include "algorithm-trainer/judge.h"
 #include "algorithm-trainer/sqlite-submission-repository.h"
 #include "algorithm-trainer/submission-record.h"
@@ -17,6 +18,7 @@
 #include <system_error>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -156,4 +158,39 @@ TEST_CASE("SQLite returns an empty result for unknown submission ids", "[sqlite]
 
   REQUIRE(std::holds_alternative<std::optional<algorithm_trainer::SubmissionRecord>>(result));
   CHECK_FALSE(std::get<std::optional<algorithm_trainer::SubmissionRecord>>(result).has_value());
+}
+
+TEST_CASE("SQLite submission history is isolated by user and problem", "[sqlite]") {
+  TemporaryDirectory directory;
+  auto first_auth_result = algorithm_trainer::AuthService::open(directory.database());
+  REQUIRE(
+      std::holds_alternative<std::unique_ptr<algorithm_trainer::AuthService>>(first_auth_result));
+  auto auth_service =
+      std::get<std::unique_ptr<algorithm_trainer::AuthService>>(std::move(first_auth_result));
+  const auto first_registration = auth_service->register_user("history-user", "password-one");
+  const auto second_registration = auth_service->register_user("other-user", "password-two");
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(first_registration));
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(second_registration));
+  const auto first_user = std::get<algorithm_trainer::AuthSession>(first_registration).user.id;
+  const auto second_user = std::get<algorithm_trainer::AuthSession>(second_registration).user.id;
+  auto repository = open_repository(directory.database());
+
+  auto first_request = submission("print('first')");
+  first_request.user_id = first_user;
+  auto other_problem = submission("print('other problem')");
+  other_problem.problem_id = "different-problem";
+  other_problem.user_id = first_user;
+  auto other_user = submission("print('other user')");
+  other_user.user_id = second_user;
+  static_cast<void>(stored_record(repository->create(first_request)));
+  static_cast<void>(stored_record(repository->create(other_problem)));
+  static_cast<void>(stored_record(repository->create(other_user)));
+
+  const auto history = repository->history(first_user, "a-plus-b");
+
+  REQUIRE(std::holds_alternative<std::vector<algorithm_trainer::SubmissionRecord>>(history));
+  const auto &records = std::get<std::vector<algorithm_trainer::SubmissionRecord>>(history);
+  REQUIRE(records.size() == 1);
+  CHECK(records.front().source_code == "print('first')");
+  CHECK(records.front().user_id == first_user);
 }

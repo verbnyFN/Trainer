@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -80,6 +81,14 @@ public:
       return std::optional{record};
     }
     return std::optional<algorithm_trainer::SubmissionRecord>{};
+  }
+
+  algorithm_trainer::SubmissionHistoryResult history(std::int64_t user_id,
+                                                     const std::string &problem_id) override {
+    if (record.user_id == user_id && record.problem_id == problem_id) {
+      return std::vector{record};
+    }
+    return std::vector<algorithm_trainer::SubmissionRecord>{};
   }
 };
 
@@ -181,6 +190,22 @@ TEST_CASE("SubmissionService retrieves persisted records", "[submission-service]
   CHECK(std::get<std::optional<algorithm_trainer::SubmissionRecord>>(found).has_value());
   REQUIRE(std::holds_alternative<std::optional<algorithm_trainer::SubmissionRecord>>(missing));
   CHECK_FALSE(std::get<std::optional<algorithm_trainer::SubmissionRecord>>(missing).has_value());
+}
+
+TEST_CASE("SubmissionService retrieves history for one user and problem", "[submission-service]") {
+  RecordingJudge judge;
+  RecordingRepository repository;
+  repository.record.user_id = 7;
+  algorithm_trainer::SubmissionService service{judge, repository};
+
+  const auto matching = service.history(7, "a-plus-b");
+  const auto other_user = service.history(8, "a-plus-b");
+  const auto other_problem = service.history(7, "another-problem");
+
+  REQUIRE(std::holds_alternative<std::vector<algorithm_trainer::SubmissionRecord>>(matching));
+  CHECK(std::get<std::vector<algorithm_trainer::SubmissionRecord>>(matching).size() == 1);
+  CHECK(std::get<std::vector<algorithm_trainer::SubmissionRecord>>(other_user).empty());
+  CHECK(std::get<std::vector<algorithm_trainer::SubmissionRecord>>(other_problem).empty());
 }
 
 TEST_CASE("invalid submissions never reach persistence or judging", "[submission-service]") {
