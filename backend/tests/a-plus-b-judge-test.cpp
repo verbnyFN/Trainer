@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <csignal>
 #include <deque>
 #include <string>
 #include <utility>
@@ -16,6 +17,7 @@ using algorithm_trainer::ExecutionResult;
 using algorithm_trainer::ExecutorError;
 using algorithm_trainer::ExecutorResult;
 using algorithm_trainer::JudgeError;
+using algorithm_trainer::RuntimeError;
 using algorithm_trainer::Verdict;
 
 algorithm_trainer::JudgeRequest submission() {
@@ -91,11 +93,30 @@ TEST_CASE("APlusBJudge rejects an incorrect later result", "[a-plus-b-judge]") {
 }
 
 TEST_CASE("APlusBJudge translates a non-zero exit into Runtime Error", "[a-plus-b-judge]") {
-  ScriptedExecutor executor{{completed({}, 1, "traceback")}};
+  ScriptedExecutor executor{{completed({}, 1, "Traceback\nZeroDivisionError: division by zero\n")}};
   algorithm_trainer::APlusBJudge judge{executor};
 
-  CHECK(verdict(judge.run(submission())) == Verdict::runtime_error);
+  const auto result = judge.run(submission());
+  REQUIRE(std::holds_alternative<RuntimeError>(result));
+  CHECK(std::get<RuntimeError>(result).type == "Exception: ZeroDivisionError");
   CHECK(executor.call_count() == 1);
+}
+
+TEST_CASE("APlusBJudge identifies normalized runtime error categories", "[a-plus-b-judge]") {
+  const auto error_type = [](ExecutionResult execution) {
+    ScriptedExecutor executor{{std::move(execution)}};
+    algorithm_trainer::APlusBJudge judge{executor};
+    const auto result = judge.run(submission());
+    REQUIRE(std::holds_alternative<RuntimeError>(result));
+    return std::get<RuntimeError>(result).type;
+  };
+
+  CHECK(error_type(completed({}, 1, "SyntaxError: invalid syntax\n")) == "Syntax Error");
+  CHECK(error_type(completed({}, 1, "MemoryError\n")) == "Memory Limit Exceeded");
+  CHECK(error_type(completed({}, 120)) == "Output Limit Exceeded");
+  CHECK(error_type(completed({}, 127)) == "Sandbox Runtime Error");
+  CHECK(error_type(completed({}, 128 + SIGSEGV)) == "Terminated by SIGSEGV");
+  CHECK(error_type(completed({}, 2)) == "Runtime Error");
 }
 
 TEST_CASE("APlusBJudge gives timeout precedence over exit status", "[a-plus-b-judge]") {

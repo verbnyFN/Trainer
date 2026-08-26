@@ -26,8 +26,10 @@ public:
   virtual ~SubmissionRepository() = default;
 
   virtual StoreSubmissionResult create(const SubmissionRequest &request) = 0;
-  virtual StoreSubmissionResult complete(SubmissionId submission_id, Verdict verdict) = 0;
-  virtual StoreSubmissionResult fail(SubmissionId submission_id) = 0;
+  virtual StoreSubmissionResult complete(SubmissionId submission_id, Verdict verdict,
+                                         std::optional<std::string> error_type = std::nullopt) = 0;
+  virtual StoreSubmissionResult fail(SubmissionId submission_id,
+                                     std::optional<std::string> error_type = std::nullopt) = 0;
   virtual FindSubmissionResult find(SubmissionId submission_id) = 0;
   virtual SubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id) = 0;
   virtual UserProgressResult progress(std::int64_t user_id) = 0;

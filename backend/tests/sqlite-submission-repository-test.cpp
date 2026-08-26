@@ -118,6 +118,22 @@ TEST_CASE("SQLite persists every public verdict", "[sqlite]") {
   }
 }
 
+TEST_CASE("SQLite persists normalized runtime error types", "[sqlite]") {
+  TemporaryDirectory directory;
+  auto repository = open_repository(directory.database());
+  const auto pending = stored_record(repository->create(submission()));
+
+  const auto completed = stored_record(
+      repository->complete(pending.id, algorithm_trainer::Verdict::runtime_error, "Syntax Error"));
+  const auto found = repository->find(pending.id);
+
+  CHECK(completed.error_type == "Syntax Error");
+  REQUIRE(std::holds_alternative<std::optional<algorithm_trainer::SubmissionRecord>>(found));
+  REQUIRE(std::get<std::optional<algorithm_trainer::SubmissionRecord>>(found).has_value());
+  CHECK(std::get<std::optional<algorithm_trainer::SubmissionRecord>>(found)->error_type ==
+        "Syntax Error");
+}
+
 TEST_CASE("SQLite prepared statements preserve hostile-looking source", "[sqlite]") {
   TemporaryDirectory directory;
   auto repository = open_repository(directory.database());

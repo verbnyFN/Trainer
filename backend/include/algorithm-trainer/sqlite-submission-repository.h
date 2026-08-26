@@ -20,8 +20,10 @@ public:
   [[nodiscard]] static OpenResult open(const std::filesystem::path &database_path);
 
   StoreSubmissionResult create(const SubmissionRequest &request) override;
-  StoreSubmissionResult complete(SubmissionId submission_id, Verdict verdict) override;
-  StoreSubmissionResult fail(SubmissionId submission_id) override;
+  StoreSubmissionResult complete(SubmissionId submission_id, Verdict verdict,
+                                 std::optional<std::string> error_type = std::nullopt) override;
+  StoreSubmissionResult fail(SubmissionId submission_id,
+                             std::optional<std::string> error_type = std::nullopt) override;
   FindSubmissionResult find(SubmissionId submission_id) override;
   SubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id) override;
   UserProgressResult progress(std::int64_t user_id) override;

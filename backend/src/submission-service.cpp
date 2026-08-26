@@ -22,7 +22,7 @@ SubmitResult SubmissionService::submit(const SubmissionRequest &submission) {
       .source_code = submission.code,
   });
   if (const auto *error = std::get_if<JudgeError>(&judged)) {
-    const auto failed = repository_.fail(pending.id);
+    const auto failed = repository_.fail(pending.id, "Sandbox Error");
     if (const auto *repository_error = std::get_if<RepositoryError>(&failed)) {
       return SubmissionServiceError{
           "Judge failed: " + error->message +
@@ -31,7 +31,12 @@ SubmitResult SubmissionService::submit(const SubmissionRequest &submission) {
     return SubmissionServiceError{"Judge failed: " + error->message};
   }
 
-  auto completed = repository_.complete(pending.id, std::get<Verdict>(judged));
+  const auto *runtime_error = std::get_if<RuntimeError>(&judged);
+  const auto verdict =
+      runtime_error == nullptr ? std::get<Verdict>(judged) : Verdict::runtime_error;
+  auto completed = repository_.complete(
+      pending.id, verdict,
+      runtime_error == nullptr ? std::nullopt : std::optional<std::string>{runtime_error->type});
   if (const auto *error = std::get_if<RepositoryError>(&completed)) {
     return SubmissionServiceError{error->message};
   }

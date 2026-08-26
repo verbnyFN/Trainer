@@ -26,7 +26,11 @@ struct JudgeError {
   std::string message;
 };
 
-using JudgeResult = std::variant<Verdict, JudgeError>;
+struct RuntimeError {
+  std::string type;
+};
+
+using JudgeResult = std::variant<Verdict, RuntimeError, JudgeError>;
 
 class Judge {
 public:

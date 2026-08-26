@@ -149,6 +149,9 @@ Json::Value submission_to_json(const algorithm_trainer::SubmissionRecord &submis
   if (submission.completed_at) {
     body["completedAt"] = *submission.completed_at;
   }
+  if (submission.error_type) {
+    body["errorType"] = *submission.error_type;
+  }
   return body;
 }
 
@@ -250,7 +253,7 @@ void submission_history(const drogon::HttpRequestPtr &request, ResponseCallback 
   }
   Json::Value body{Json::arrayValue};
   for (const auto &record : std::get<std::vector<algorithm_trainer::SubmissionRecord>>(history)) {
-    body.append(submission_to_json(record, false));
+    body.append(submission_to_json(record, true));
   }
   callback(drogon::HttpResponse::newHttpJsonResponse(body));
 }

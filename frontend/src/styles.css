@@ -178,7 +178,9 @@ pre {
   display: grid;
   grid-template-columns: minmax(300px, 0.8fr) minmax(440px, 1.2fr);
   gap: 1px;
+  height: calc(100vh - 4.5rem);
   min-height: calc(100vh - 4.5rem);
+  overflow: hidden;
   background: #cfd7e3;
 }
 
@@ -275,6 +277,7 @@ pre {
 
 .problem {
   padding: clamp(2rem, 5vw, 5rem);
+  overflow-y: auto;
   line-height: 1.65;
 }
 
@@ -329,7 +332,6 @@ pre {
   list-style: none;
 }
 
-.history-list li,
 .history-list li div {
   display: flex;
   align-items: center;
@@ -342,6 +344,48 @@ pre {
   border: 1px solid #dfe5ed;
   border-radius: 0.55rem;
   background: #f7f9fc;
+}
+
+.history-list details {
+  width: 100%;
+}
+
+.history-list summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.history-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.history-list summary::before {
+  content: "›";
+  color: #66758b;
+  font-size: 1.25rem;
+  transition: transform 120ms ease;
+}
+
+.history-list details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.history-list summary > div {
+  margin-right: auto;
+}
+
+.history-list details pre {
+  margin: 0.8rem 0 0;
+  padding: 1rem;
+  border-color: #303744;
+  color: #e8edf5;
+  background: #1e1e1e;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
 }
 
 .history-list span,
@@ -361,8 +405,9 @@ pre {
 
 .solution {
   display: grid;
-  grid-template-rows: auto minmax(420px, 1fr) auto;
-  min-height: calc(100vh - 4.5rem);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
 }
 
 .solution-header,
@@ -388,7 +433,7 @@ pre {
 }
 
 .editor {
-  min-height: 420px;
+  min-height: 0;
   overflow: hidden;
   background: #1e1e1e;
 }
@@ -443,6 +488,9 @@ button:disabled {
 
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: calc(100vh - 4.5rem);
+    overflow: visible;
   }
 
   .activity-grid {
@@ -450,6 +498,7 @@ button:disabled {
   }
 
   .solution {
+    height: auto;
     min-height: 650px;
   }
 }

@@ -36,6 +36,7 @@ public:
   std::size_t complete_count{};
   std::size_t fail_count{};
   std::optional<algorithm_trainer::Verdict> completed_verdict;
+  std::optional<std::string> stored_error_type;
   algorithm_trainer::SubmissionRecord record{
       .id = {42},
       .problem_id = "a-plus-b",
@@ -59,19 +60,25 @@ public:
     return record;
   }
 
-  algorithm_trainer::StoreSubmissionResult complete(algorithm_trainer::SubmissionId,
-                                                    algorithm_trainer::Verdict verdict) override {
+  algorithm_trainer::StoreSubmissionResult
+  complete(algorithm_trainer::SubmissionId, algorithm_trainer::Verdict verdict,
+           std::optional<std::string> error_type) override {
     ++complete_count;
     completed_verdict = verdict;
     record.status = algorithm_trainer::SubmissionStatus::completed;
     record.verdict = verdict;
+    record.error_type = error_type;
+    stored_error_type = std::move(error_type);
     record.completed_at = "2026-01-01T00:00:01.000Z";
     return record;
   }
 
-  algorithm_trainer::StoreSubmissionResult fail(algorithm_trainer::SubmissionId) override {
+  algorithm_trainer::StoreSubmissionResult fail(algorithm_trainer::SubmissionId,
+                                                std::optional<std::string> error_type) override {
     ++fail_count;
     record.status = algorithm_trainer::SubmissionStatus::failed;
+    record.error_type = error_type;
+    stored_error_type = std::move(error_type);
     record.completed_at = "2026-01-01T00:00:01.000Z";
     return record;
   }
@@ -180,6 +187,22 @@ TEST_CASE("SubmissionService marks judge infrastructure failures", "[submission-
             "sandbox unavailable") != std::string::npos);
   CHECK(repository.fail_count == 1);
   CHECK(repository.record.status == algorithm_trainer::SubmissionStatus::failed);
+  CHECK(repository.stored_error_type == "Sandbox Error");
+}
+
+TEST_CASE("SubmissionService persists a normalized runtime error type", "[submission-service]") {
+  RecordingJudge judge;
+  RecordingRepository repository;
+  judge.result = algorithm_trainer::RuntimeError{"Syntax Error"};
+  algorithm_trainer::SubmissionService service{judge, repository};
+
+  const auto result = service.submit(valid_submission());
+
+  REQUIRE(std::holds_alternative<algorithm_trainer::SubmissionRecord>(result));
+  const auto &record = std::get<algorithm_trainer::SubmissionRecord>(result);
+  CHECK(record.verdict == algorithm_trainer::Verdict::runtime_error);
+  CHECK(record.error_type == "Syntax Error");
+  CHECK(repository.stored_error_type == "Syntax Error");
 }
 
 TEST_CASE("repository creation failures prevent judging", "[submission-service]") {

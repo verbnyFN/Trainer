@@ -30,6 +30,7 @@ struct SubmissionRecord {
   std::string created_at;
   std::optional<std::string> completed_at;
   std::optional<std::int64_t> user_id;
+  std::optional<std::string> error_type;
 };
 
 struct CompletedProblem {

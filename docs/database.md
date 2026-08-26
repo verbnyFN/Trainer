@@ -35,15 +35,17 @@ Anonymous submissions remain supported but do not appear in user history.
 
 Hidden cases, test inputs, expected outputs, NsJail configuration, stderr, and internal diagnostics are
 not stored. The database contains the submitted source code because submission retrieval and history
-need to reproduce what the user sent.
+need to reproduce what the user sent. Runtime failures store only a normalized error category; raw
+stderr and tracebacks are discarded after judging.
 
 ## Migrations
 
 Migrations live in `migrations/` and applied versions are recorded in `schema_migrations`.
 `001-create-submissions.sql` creates the initial submissions table, `002-create-auth.sql` adds users
 and sessions, and `003-link-submissions-to-users.sql` adds submission ownership and the history
-index. Migrations are applied in version order inside transactions and should never be edited after
-deployment; add a new numbered migration instead.
+index. `004-add-submission-error-type.sql` adds normalized runtime-error categories. Migrations are
+applied in version order inside transactions and should never be edited after deployment; add a new
+numbered migration instead.
 
 SQLite foreign-key enforcement is enabled and connections use a five-second busy timeout. SQL values
 are always bound through prepared statements, including source code containing quotes or embedded NUL

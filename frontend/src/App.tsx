@@ -14,9 +14,19 @@ const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   month: "2-digit",
   year: "2-digit",
 });
+const timeFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 function formatDate(value: string) {
   return dateFormatter.format(new Date(value)).replaceAll("/", ":");
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  return `${dateFormatter.format(date).replaceAll("/", ":")} ${timeFormatter.format(date)}`;
 }
 
 type SubmissionResponse = {
@@ -24,6 +34,7 @@ type SubmissionResponse = {
   error?: string;
   status?: string;
   verdict?: string;
+  errorType?: string;
   language?: string;
   createdAt?: string;
 };
@@ -31,8 +42,10 @@ type SubmissionResponse = {
 type SubmissionHistoryEntry = {
   id: number;
   language: string;
+  code: string;
   status: string;
   verdict?: string;
+  errorType?: string;
   createdAt: string;
 };
 
@@ -310,8 +323,10 @@ export function App() {
           {
             id: result.id!,
             language: result.language!,
+            code,
             status: result.status ?? "completed",
             verdict: result.verdict,
+            errorType: result.errorType,
             createdAt: result.createdAt!,
           },
           ...current.filter((entry) => entry.id !== result.id),
@@ -495,16 +510,21 @@ export function App() {
                 ) : (
                   <ul className="history-list">
                     {history.map((entry) => {
-                      const result = entry.verdict ?? (entry.status === "failed" ? "Judge Error" : "Pending");
+                      const result = entry.errorType ?? entry.verdict ?? (entry.status === "failed" ? "Judge Error" : "Pending");
                       return (
                         <li key={entry.id}>
-                          <div>
-                            <strong className={result === "Accepted" ? "history-success" : "history-failure"}>
-                              {result}
-                            </strong>
-                            <span>{entry.language === "python" ? "Python 3" : entry.language}</span>
-                          </div>
-                          <time dateTime={entry.createdAt}>{formatDate(entry.createdAt)}</time>
+                          <details>
+                            <summary>
+                              <div>
+                                <strong className={result === "Accepted" ? "history-success" : "history-failure"}>
+                                  {result}
+                                </strong>
+                                <span>{entry.language === "python" ? "Python 3" : entry.language}</span>
+                              </div>
+                              <time dateTime={entry.createdAt}>{formatDateTime(entry.createdAt)}</time>
+                            </summary>
+                            <pre aria-label={`Source code for submission ${entry.id}`}><code>{entry.code}</code></pre>
+                          </details>
                         </li>
                       );
                     })}

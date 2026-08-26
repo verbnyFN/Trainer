@@ -29,6 +29,7 @@ constexpr int verdict_column{5};
 constexpr int created_at_column{6};
 constexpr int completed_at_column{7};
 constexpr int user_id_column{8};
+constexpr int error_type_column{9};
 
 class Statement {
 public:
@@ -192,11 +193,15 @@ std::variant<SubmissionRecord, RepositoryError> read_record(sqlite3_stmt *statem
       .user_id = sqlite3_column_type(statement, user_id_column) == SQLITE_NULL
                      ? std::nullopt
                      : std::optional<std::int64_t>{sqlite3_column_int64(statement, user_id_column)},
+      .error_type = sqlite3_column_type(statement, error_type_column) == SQLITE_NULL
+                        ? std::nullopt
+                        : std::optional<std::string>{column_text(statement, error_type_column)},
   };
 }
 
 constexpr std::string_view returned_columns{
-    "id, problem_id, language, source_code, status, verdict, created_at, completed_at, user_id"};
+    "id, problem_id, language, source_code, status, verdict, created_at, completed_at, user_id, "
+    "error_type"};
 
 } // namespace
 
@@ -248,6 +253,9 @@ SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
   if (const auto error = apply_migration(database, 3, "003-link-submissions-to-users.sql")) {
     return *error;
   }
+  if (const auto error = apply_migration(database, 4, "004-add-submission-error-type.sql")) {
+    return *error;
+  }
   return std::unique_ptr<SQLiteSubmissionRepository>{
       new SQLiteSubmissionRepository{std::move(implementation)}};
 }
@@ -277,9 +285,10 @@ StoreSubmissionResult SQLiteSubmissionRepository::create(const SubmissionRequest
 }
 
 StoreSubmissionResult SQLiteSubmissionRepository::complete(SubmissionId submission_id,
-                                                           Verdict verdict) {
+                                                           Verdict verdict,
+                                                           std::optional<std::string> error_type) {
   const auto sql = "UPDATE submissions SET status = 'completed', verdict = ?, "
-                   "completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                   "error_type = ?, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
                    "WHERE id = ? AND status = 'pending' RETURNING " +
                    std::string{returned_columns} + ';';
   Statement statement{implementation_->database, sql};
@@ -289,15 +298,21 @@ StoreSubmissionResult SQLiteSubmissionRepository::complete(SubmissionId submissi
   const auto name = verdict_name(verdict);
   sqlite3_bind_text(statement.get(), 1, name.data(), static_cast<int>(name.size()),
                     SQLITE_TRANSIENT);
-  sqlite3_bind_int64(statement.get(), 2, submission_id.value);
+  if (error_type) {
+    bind_text(statement.get(), 2, *error_type);
+  } else {
+    sqlite3_bind_null(statement.get(), 2);
+  }
+  sqlite3_bind_int64(statement.get(), 3, submission_id.value);
   if (sqlite3_step(statement.get()) != SQLITE_ROW) {
     return RepositoryError{"Submission is missing or is not pending"};
   }
   return read_record(statement.get());
 }
 
-StoreSubmissionResult SQLiteSubmissionRepository::fail(SubmissionId submission_id) {
-  const auto sql = "UPDATE submissions SET status = 'failed', "
+StoreSubmissionResult SQLiteSubmissionRepository::fail(SubmissionId submission_id,
+                                                       std::optional<std::string> error_type) {
+  const auto sql = "UPDATE submissions SET status = 'failed', error_type = ?, "
                    "completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
                    "WHERE id = ? AND status = 'pending' RETURNING " +
                    std::string{returned_columns} + ';';
@@ -305,7 +320,12 @@ StoreSubmissionResult SQLiteSubmissionRepository::fail(SubmissionId submission_i
   if (!statement.valid()) {
     return RepositoryError{statement.error()};
   }
-  sqlite3_bind_int64(statement.get(), 1, submission_id.value);
+  if (error_type) {
+    bind_text(statement.get(), 1, *error_type);
+  } else {
+    sqlite3_bind_null(statement.get(), 1);
+  }
+  sqlite3_bind_int64(statement.get(), 2, submission_id.value);
   if (sqlite3_step(statement.get()) != SQLITE_ROW) {
     return RepositoryError{"Submission is missing or is not pending"};
   }
