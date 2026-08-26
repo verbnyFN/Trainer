@@ -17,6 +17,11 @@ struct ProblemExample {
   std::string output;
 };
 
+struct ProblemTestCase {
+  std::string input;
+  std::string expected_output;
+};
+
 struct Problem {
   std::string id;
   std::string title;
@@ -27,6 +32,7 @@ struct Problem {
   std::vector<std::string> tags;
   std::vector<std::string> languages;
   std::vector<ProblemExample> examples;
+  std::vector<ProblemTestCase> hidden_tests;
 };
 
 [[nodiscard]] const Problem *find_problem(std::string_view slug);

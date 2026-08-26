@@ -1,6 +1,6 @@
-#include "algorithm-trainer/a-plus-b-judge.h"
 #include "algorithm-trainer/auth-service.h"
 #include "algorithm-trainer/nsjail-python-executor.h"
+#include "algorithm-trainer/problem-judge.h"
 #include "algorithm-trainer/problem.h"
 #include "algorithm-trainer/sqlite-submission-repository.h"
 #include "algorithm-trainer/submission-record.h"
@@ -299,6 +299,11 @@ void profile(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
   body["activity"]["currentStreakDays"] = Json::Int64{progress.current_streak_days};
   body["activity"]["completedProblems"] =
       Json::Int64{static_cast<std::int64_t>(progress.completed_problems.size())};
+  if (progress.most_recent_submission_problem_id) {
+    body["mostRecentSubmissionProblemId"] = *progress.most_recent_submission_problem_id;
+  } else {
+    body["mostRecentSubmissionProblemId"] = Json::nullValue;
+  }
   body["completedProblems"] = Json::Value{Json::arrayValue};
   for (const auto &completed : progress.completed_problems) {
     Json::Value item;
@@ -354,7 +359,7 @@ void get_submission(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
 int main() {
   constexpr std::uint16_t port{8080};
   algorithm_trainer::NsJailPythonExecutor executor;
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
   const auto *configured_database = std::getenv("ALGORITHM_TRAINER_DATABASE");
   const auto database_path = configured_database == nullptr
                                  ? std::filesystem::path{"data/algorithm-trainer.sqlite3"}

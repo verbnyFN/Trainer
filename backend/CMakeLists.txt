@@ -8,12 +8,12 @@ pkg_check_modules(Sodium REQUIRED IMPORTED_TARGET libsodium)
 
 add_library(
   algorithm-trainer-core
-  src/a-plus-b-judge.cpp
   src/auth-service.cpp
   src/judge.cpp
   src/mock-judge.cpp
   src/nsjail-python-executor.cpp
   src/problem.cpp
+  src/problem-judge.cpp
   src/sqlite-submission-repository.cpp
   src/submission.cpp
   src/submission-record.cpp

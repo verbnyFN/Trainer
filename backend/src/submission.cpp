@@ -1,13 +1,14 @@
 #include "algorithm-trainer/submission.h"
 
+#include "algorithm-trainer/problem.h"
+
+#include <algorithm>
 #include <cstddef>
-#include <string_view>
 #include <utility>
 
 namespace algorithm_trainer {
 namespace {
 
-constexpr std::string_view problem_id{"a-plus-b"};
 constexpr std::size_t maximum_code_size{64 * 1024};
 
 ValidationError error(std::string message) { return ValidationError{std::move(message)}; }
@@ -31,10 +32,11 @@ SubmissionValidation validate_submission(const Json::Value &json) {
       .code = json["code"].asString(),
   };
 
-  if (request.problem_id != problem_id) {
+  const auto *problem = find_problem(request.problem_id);
+  if (problem == nullptr) {
     return error("Unsupported problemId");
   }
-  if (request.language != "python" && request.language != "cpp") {
+  if (std::ranges::find(problem->languages, request.language) == problem->languages.end()) {
     return error("Unsupported language");
   }
   if (request.code.empty()) {

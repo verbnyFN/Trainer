@@ -213,6 +213,71 @@ pre {
   color: #66758b;
 }
 
+.tag-search {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 2rem;
+}
+
+.tag-search > label {
+  color: #445169;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.tag-search-control {
+  position: relative;
+}
+
+.tag-search input {
+  width: 100%;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid #cfd7e3;
+  border-radius: 0.55rem;
+  color: #172033;
+  background: #ffffff;
+  font: inherit;
+}
+
+.tag-search input:focus {
+  border-color: #7188dc;
+  outline: 3px solid #dfe5ff;
+}
+
+.tag-hints {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  left: 0;
+  margin: 0;
+  padding: 0.35rem;
+  border: 1px solid #dfe5ed;
+  border-radius: 0.55rem;
+  background: #ffffff;
+  box-shadow: 0 0.8rem 2rem rgba(25, 37, 67, 0.12);
+  list-style: none;
+}
+
+.tag-hints button {
+  width: 100%;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  color: #445169;
+  background: transparent;
+  text-align: left;
+}
+
+.tag-hints button:hover {
+  color: #3157d5;
+  background: #f1f4ff;
+}
+
+.problem-filter-empty {
+  margin-top: 2rem;
+  color: #66758b;
+}
+
 .problem-list {
   display: grid;
   gap: 0.85rem;
@@ -247,6 +312,22 @@ pre {
 .problem-list-title {
   justify-content: space-between;
   font-size: 1.1rem;
+}
+
+.problem-list-title > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.most-recent-problem {
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  color: #5a3db5;
+  background: #eee9ff;
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 .difficulty,

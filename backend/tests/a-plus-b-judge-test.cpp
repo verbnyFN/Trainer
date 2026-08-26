@@ -1,6 +1,7 @@
-#include "algorithm-trainer/a-plus-b-judge.h"
 #include "algorithm-trainer/executor.h"
 #include "algorithm-trainer/judge.h"
+#include "algorithm-trainer/problem-judge.h"
+#include "algorithm-trainer/problem.h"
 #include "scripted-executor.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -47,12 +48,11 @@ ExecutionResult timed_out() {
 }
 
 std::deque<ExecutorResult> correct_results() {
-  return {
-      completed("5\n"),
-      completed("0\n"),
-      completed("-12\n"),
-      completed("3000000000\n"),
-  };
+  std::deque<ExecutorResult> results;
+  for (const auto &test : algorithm_trainer::find_problem("a-plus-b")->hidden_tests) {
+    results.push_back(completed(test.expected_output));
+  }
+  return results;
 }
 
 Verdict verdict(const algorithm_trainer::JudgeResult &result) {
@@ -62,39 +62,39 @@ Verdict verdict(const algorithm_trainer::JudgeResult &result) {
 
 } // namespace
 
-TEST_CASE("APlusBJudge accepts when every hidden case is correct", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge accepts when every hidden case is correct", "[problem-judge]") {
   ScriptedExecutor executor{correct_results()};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   CHECK(verdict(judge.run(submission())) == Verdict::accepted);
-  CHECK(executor.call_count() == 4);
+  CHECK(executor.call_count() == 10);
   CHECK(executor.requests.front().language == "python");
   CHECK(executor.requests.front().source_code == submission().source_code);
 }
 
-TEST_CASE("APlusBJudge rejects an incorrect first result", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge rejects an incorrect first result", "[problem-judge]") {
   auto results = correct_results();
   results.front() = completed("6\n");
   ScriptedExecutor executor{std::move(results)};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   CHECK(verdict(judge.run(submission())) == Verdict::wrong_answer);
   CHECK(executor.call_count() == 1);
 }
 
-TEST_CASE("APlusBJudge rejects an incorrect later result", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge rejects an incorrect later result", "[problem-judge]") {
   auto results = correct_results();
   results[2] = completed("12\n");
   ScriptedExecutor executor{std::move(results)};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   CHECK(verdict(judge.run(submission())) == Verdict::wrong_answer);
   CHECK(executor.call_count() == 3);
 }
 
-TEST_CASE("APlusBJudge translates a non-zero exit into Runtime Error", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge translates a non-zero exit into Runtime Error", "[problem-judge]") {
   ScriptedExecutor executor{{completed({}, 1, "Traceback\nZeroDivisionError: division by zero\n")}};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   const auto result = judge.run(submission());
   REQUIRE(std::holds_alternative<RuntimeError>(result));
@@ -102,10 +102,10 @@ TEST_CASE("APlusBJudge translates a non-zero exit into Runtime Error", "[a-plus-
   CHECK(executor.call_count() == 1);
 }
 
-TEST_CASE("APlusBJudge identifies normalized runtime error categories", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge identifies normalized runtime error categories", "[problem-judge]") {
   const auto error_type = [](ExecutionResult execution) {
     ScriptedExecutor executor{{std::move(execution)}};
-    algorithm_trainer::APlusBJudge judge{executor};
+    algorithm_trainer::ProblemJudge judge{executor};
     const auto result = judge.run(submission());
     REQUIRE(std::holds_alternative<RuntimeError>(result));
     return std::get<RuntimeError>(result).type;
@@ -119,19 +119,19 @@ TEST_CASE("APlusBJudge identifies normalized runtime error categories", "[a-plus
   CHECK(error_type(completed({}, 2)) == "Runtime Error");
 }
 
-TEST_CASE("APlusBJudge gives timeout precedence over exit status", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge gives timeout precedence over exit status", "[problem-judge]") {
   auto result = timed_out();
   result.exit_code = 137;
   ScriptedExecutor executor{{result}};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   CHECK(verdict(judge.run(submission())) == Verdict::time_limit_exceeded);
   CHECK(executor.call_count() == 1);
 }
 
-TEST_CASE("APlusBJudge propagates executor infrastructure errors", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge propagates executor infrastructure errors", "[problem-judge]") {
   ScriptedExecutor executor{{ExecutorError{"sandbox unavailable"}}};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   const auto result = judge.run(submission());
 
@@ -140,22 +140,22 @@ TEST_CASE("APlusBJudge propagates executor infrastructure errors", "[a-plus-b-ju
   CHECK(executor.call_count() == 1);
 }
 
-TEST_CASE("APlusBJudge normalizes line endings and trailing whitespace", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge normalizes line endings and trailing whitespace", "[problem-judge]") {
   auto results = correct_results();
   results[0] = completed("5 \t\r\n\r\n");
   results[1] = completed("0\r");
   ScriptedExecutor executor{std::move(results)};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   CHECK(verdict(judge.run(submission())) == Verdict::accepted);
-  CHECK(executor.call_count() == 4);
+  CHECK(executor.call_count() == 10);
 }
 
-TEST_CASE("APlusBJudge does not use fuzzy output comparison", "[a-plus-b-judge]") {
+TEST_CASE("ProblemJudge does not use fuzzy output comparison", "[problem-judge]") {
   auto results = correct_results();
   results.front() = completed("05\n");
   ScriptedExecutor executor{std::move(results)};
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
 
   CHECK(verdict(judge.run(submission())) == Verdict::wrong_answer);
   CHECK(executor.call_count() == 1);

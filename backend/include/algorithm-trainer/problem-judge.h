@@ -5,9 +5,9 @@
 
 namespace algorithm_trainer {
 
-class APlusBJudge final : public Judge {
+class ProblemJudge final : public Judge {
 public:
-  explicit APlusBJudge(Executor &executor);
+  explicit ProblemJudge(Executor &executor);
 
   JudgeResult run(const JudgeRequest &request) override;
 

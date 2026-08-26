@@ -1,14 +1,16 @@
-#include "algorithm-trainer/a-plus-b-judge.h"
 #include "algorithm-trainer/executor.h"
 #include "algorithm-trainer/judge.h"
 #include "algorithm-trainer/nsjail-python-executor.h"
+#include "algorithm-trainer/problem-judge.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -37,11 +39,12 @@ algorithm_trainer::ExecutionResult run_cpp(std::string source, std::string input
   }));
 }
 
-algorithm_trainer::JudgeResult judge(std::string source, std::string language = "python") {
+algorithm_trainer::JudgeResult judge(std::string source, std::string language = "python",
+                                     std::string problem_id = "a-plus-b") {
   algorithm_trainer::NsJailPythonExecutor executor;
-  algorithm_trainer::APlusBJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor};
   return judge.run({
-      .problem_id = "a-plus-b",
+      .problem_id = std::move(problem_id),
       .language = std::move(language),
       .source_code = std::move(source),
   });
@@ -51,6 +54,9 @@ algorithm_trainer::Verdict require_verdict(algorithm_trainer::JudgeResult result
   if (const auto *error = std::get_if<algorithm_trainer::JudgeError>(&result)) {
     SKIP("NsJail is unavailable in this kernel/environment: " << error->message);
   }
+  if (const auto *runtime_error = std::get_if<algorithm_trainer::RuntimeError>(&result)) {
+    FAIL("Submission ended with " << runtime_error->type);
+  }
   return std::get<algorithm_trainer::Verdict>(result);
 }
 
@@ -59,6 +65,87 @@ algorithm_trainer::Verdict require_verdict(algorithm_trainer::JudgeResult result
 TEST_CASE("NsJail executes a correct A+B submission", "[sandbox]") {
   const auto verdict = require_verdict(judge("a, b = map(int, input().split())\nprint(a + b)\n"));
   CHECK(verdict == algorithm_trainer::Verdict::accepted);
+}
+
+TEST_CASE("NsJail accepts reference solutions for every added problem", "[sandbox][catalog]") {
+  const std::vector<std::pair<std::string, std::string>> solutions{
+      {"merge-sort", R"(n = int(input())
+values = list(map(int, input().split()))
+print(*sorted(values))
+)"},
+      {"activity-selection", R"(n = int(input())
+activities = [tuple(map(int, input().split())) for _ in range(n)]
+activities.sort(key=lambda interval: (interval[1], interval[0]))
+last_end = -10**30
+answer = 0
+for start, end in activities:
+    if start >= last_end:
+        answer += 1
+        last_end = end
+print(answer)
+)"},
+      {"assign-cookies", R"(n, m = map(int, input().split())
+appetites = sorted(map(int, input().split()))
+cookies = sorted(map(int, input().split()))
+child = 0
+for cookie in cookies:
+    if child < n and cookie >= appetites[child]:
+        child += 1
+print(child)
+)"},
+      {"minimum-arrows", R"(n = int(input())
+balloons = [tuple(map(int, input().split())) for _ in range(n)]
+balloons.sort(key=lambda interval: (interval[1], interval[0]))
+arrows = 0
+position = 0
+for start, end in balloons:
+    if arrows == 0 or start > position:
+        arrows += 1
+        position = end
+print(arrows)
+)"},
+      {"distinct-values", R"(n = int(input())
+print(len(set(map(int, input().split()))))
+)"},
+      {"first-unique", R"(from collections import Counter
+n = int(input())
+values = list(map(int, input().split()))
+counts = Counter(values)
+print(next((value for value in values if counts[value] == 1), -1))
+)"},
+      {"pair-sum-count", R"(n, target = map(int, input().split())
+values = map(int, input().split())
+seen = {}
+answer = 0
+for value in values:
+    answer += seen.get(target - value, 0)
+    seen[value] = seen.get(value, 0) + 1
+print(answer)
+)"},
+  };
+
+  for (const auto &[problem_id, source] : solutions) {
+    CAPTURE(problem_id);
+    CHECK(require_verdict(judge(source, "python", problem_id)) ==
+          algorithm_trainer::Verdict::accepted);
+  }
+}
+
+TEST_CASE("Merge Sort rejects a quadratic implementation on its large case", "[sandbox][catalog]") {
+  const auto result = judge(R"(n = int(input())
+values = list(map(int, input().split()))
+for index in range(1, n):
+    value = values[index]
+    position = index
+    while position > 0 and values[position - 1] > value:
+        values[position] = values[position - 1]
+        position -= 1
+    values[position] = value
+print(*values)
+)",
+                            "python", "merge-sort");
+
+  CHECK(require_verdict(result) == algorithm_trainer::Verdict::time_limit_exceeded);
 }
 
 TEST_CASE("NsJail compiles and executes a C++20 submission", "[sandbox][cpp]") {

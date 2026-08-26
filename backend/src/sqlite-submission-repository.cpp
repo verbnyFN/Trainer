@@ -398,6 +398,21 @@ UserProgressResult SQLiteSubmissionRepository::progress(std::int64_t user_id) {
       .total_submissions = sqlite3_column_int64(totals.get(), 0),
       .accepted_submissions = sqlite3_column_int64(totals.get(), 1),
   };
+  Statement most_recent{implementation_->database,
+                        "SELECT problem_id FROM submissions WHERE user_id = ? "
+                        "ORDER BY created_at DESC, id DESC LIMIT 1;"};
+  if (!most_recent.valid()) {
+    return RepositoryError{most_recent.error()};
+  }
+  sqlite3_bind_int64(most_recent.get(), 1, user_id);
+  const auto most_recent_result = sqlite3_step(most_recent.get());
+  if (most_recent_result == SQLITE_ROW) {
+    progress.most_recent_submission_problem_id = column_text(most_recent.get(), 0);
+  } else if (most_recent_result != SQLITE_DONE) {
+    return database_error(implementation_->database,
+                          "Could not retrieve most recent submission problem");
+  }
+
   Statement streak{
       implementation_->database,
       "WITH days AS ("

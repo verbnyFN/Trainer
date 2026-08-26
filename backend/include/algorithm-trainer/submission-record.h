@@ -42,6 +42,7 @@ struct UserProgress {
   std::int64_t total_submissions{};
   std::int64_t accepted_submissions{};
   std::int64_t current_streak_days{};
+  std::optional<std::string> most_recent_submission_problem_id;
   std::vector<CompletedProblem> completed_problems;
 };
 

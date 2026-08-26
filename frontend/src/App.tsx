@@ -127,6 +127,7 @@ type View = "problem" | "problems" | "profile";
 
 type ProfileData = {
   user: AuthUser;
+  mostRecentSubmissionProblemId: string | null;
   activity: {
     totalSubmissions: number;
     acceptedSubmissions: number;
@@ -164,6 +165,25 @@ export function App() {
   const [problems, setProblems] = useState<ProblemSummary[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
   const [problemsError, setProblemsError] = useState<string>();
+  const [mostRecentProblemId, setMostRecentProblemId] = useState<string>();
+  const [tagQuery, setTagQuery] = useState("");
+  const [tagSearchFocused, setTagSearchFocused] = useState(false);
+
+  const orderedProblems = [...problems].sort((left, right) => {
+    if (left.id === mostRecentProblemId) return -1;
+    if (right.id === mostRecentProblemId) return 1;
+    return 0;
+  });
+  const normalizedTagQuery = tagQuery.trim().replace(/^#/, "").toLowerCase();
+  const availableTags = [...new Set(problems.flatMap((entry) => entry.tags))].sort();
+  const tagHints = normalizedTagQuery === ""
+    ? []
+    : availableTags.filter((tag) => tag.toLowerCase().includes(normalizedTagQuery)).slice(0, 6);
+  const filteredProblems = normalizedTagQuery === ""
+    ? orderedProblems
+    : orderedProblems.filter((entry) =>
+        entry.tags.some((tag) => tag.toLowerCase().includes(normalizedTagQuery)),
+      );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -244,7 +264,9 @@ export function App() {
         if (!response.ok) {
           throw new Error((result as ErrorResponse).error ?? "Profile could not be loaded");
         }
-        setProfile(result as ProfileData);
+        const loadedProfile = result as ProfileData;
+        setProfile(loadedProfile);
+        setMostRecentProblemId(loadedProfile.mostRecentSubmissionProblemId ?? undefined);
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setProfileError(error instanceof Error ? error.message : "Profile could not be loaded");
@@ -372,6 +394,7 @@ export function App() {
       }
       setUser(undefined);
       setProfile(undefined);
+      setMostRecentProblemId(undefined);
       setView("problem");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Logout failed");
@@ -406,6 +429,7 @@ export function App() {
       }
 
       setMessage(result.verdict ?? "Submission completed");
+      setMostRecentProblemId(problem.id);
       if (user !== undefined && result.id !== undefined && result.language !== undefined && result.createdAt !== undefined) {
         setHistory((current) => [
           {
@@ -561,13 +585,42 @@ export function App() {
             <h1>Problems</h1>
             <p>Choose a problem to open its statement and code editor.</p>
           </header>
+          <div className="tag-search">
+            <label htmlFor="problem-tag-search">Search by hashtag</label>
+            <div className="tag-search-control">
+              <input
+                id="problem-tag-search"
+                type="search"
+                value={tagQuery}
+                placeholder="#hash-table"
+                autoComplete="off"
+                onChange={(event) => setTagQuery(event.target.value)}
+                onFocus={() => setTagSearchFocused(true)}
+                onBlur={() => window.setTimeout(() => setTagSearchFocused(false), 100)}
+              />
+              {tagSearchFocused && tagHints.length > 0 && (
+                <ul className="tag-hints" aria-label="Matching hashtags">
+                  {tagHints.map((tag) => (
+                    <li key={tag}>
+                      <button type="button" onMouseDown={() => setTagQuery(`#${tag}`)}>
+                        #{tag}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
           {problemsLoading && problems.length === 0 ? (
             <p role="status">Loading problems…</p>
           ) : problemsError !== undefined ? (
             <p className="profile-error" role="alert">{problemsError}</p>
           ) : (
+            filteredProblems.length === 0 ? (
+              <p className="problem-filter-empty">No problems match this hashtag.</p>
+            ) : (
             <ul className="problem-list">
-              {problems.map((entry) => (
+              {filteredProblems.map((entry) => (
                 <li key={entry.id}>
                   <button
                     type="button"
@@ -577,7 +630,12 @@ export function App() {
                     }}
                   >
                     <div className="problem-list-title">
-                      <strong>{entry.title}</strong>
+                      <div>
+                        <strong>{entry.title}</strong>
+                        {entry.id === mostRecentProblemId && (
+                          <span className="most-recent-problem">Most recent submission</span>
+                        )}
+                      </div>
                       <span className={`difficulty difficulty-${entry.difficulty.toLowerCase()}`}>{entry.difficulty}</span>
                     </div>
                     <div className="problem-tags" aria-label="Topics">
@@ -587,6 +645,7 @@ export function App() {
                 </li>
               ))}
             </ul>
+            )
           )}
         </main>
       ) : (

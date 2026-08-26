@@ -54,7 +54,12 @@ TEST_CASE("submission fields are required strings", "[submission]") {
   CHECK(validation_error(json) == "language must be a string");
 }
 
-TEST_CASE("only the A + B problem and configured languages are supported", "[submission]") {
+TEST_CASE("catalog problems and configured languages are supported", "[submission]") {
+  auto merge_sort = valid_request();
+  merge_sort["problemId"] = "merge-sort";
+  CHECK(std::holds_alternative<algorithm_trainer::SubmissionRequest>(
+      algorithm_trainer::validate_submission(merge_sort)));
+
   auto json = valid_request();
   json["problemId"] = "other-problem";
   CHECK(validation_error(json) == "Unsupported problemId");

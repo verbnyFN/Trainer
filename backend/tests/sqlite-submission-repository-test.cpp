@@ -275,6 +275,7 @@ TEST_CASE("SQLite derives user progress from accepted submissions", "[sqlite]") 
   CHECK(progress.total_submissions == 4);
   CHECK(progress.accepted_submissions == 3);
   CHECK(progress.current_streak_days == 3);
+  CHECK(progress.most_recent_submission_problem_id == "other-problem");
   REQUIRE(progress.completed_problems.size() == 2);
   CHECK(std::ranges::any_of(progress.completed_problems, [](const auto &completed) {
     return completed.problem_id == "a-plus-b";

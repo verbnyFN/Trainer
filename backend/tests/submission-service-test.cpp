@@ -106,6 +106,7 @@ public:
         .total_submissions = 1,
         .accepted_submissions = record.verdict == algorithm_trainer::Verdict::accepted ? 1 : 0,
         .current_streak_days = record.verdict == algorithm_trainer::Verdict::accepted ? 1 : 0,
+        .most_recent_submission_problem_id = record.problem_id,
         .completed_problems = record.verdict == algorithm_trainer::Verdict::accepted
                                   ? std::vector<algorithm_trainer::CompletedProblem>{{
                                         .problem_id = record.problem_id,
@@ -263,6 +264,7 @@ TEST_CASE("SubmissionService retrieves user progress", "[submission-service]") {
   CHECK(progress.total_submissions == 1);
   CHECK(progress.accepted_submissions == 1);
   CHECK(progress.current_streak_days == 1);
+  CHECK(progress.most_recent_submission_problem_id == "a-plus-b");
   REQUIRE(progress.completed_problems.size() == 1);
   CHECK(progress.completed_problems.front().problem_id == "a-plus-b");
 }
