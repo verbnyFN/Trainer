@@ -6,6 +6,7 @@
 #include "algorithm-trainer/submission.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <sqlite3.h>
 
 #include <array>
 #include <cstdlib>
@@ -64,6 +65,25 @@ algorithm_trainer::SubmissionRequest submission(std::string code = "print(3)") {
 algorithm_trainer::SubmissionRecord stored_record(algorithm_trainer::StoreSubmissionResult result) {
   REQUIRE(std::holds_alternative<algorithm_trainer::SubmissionRecord>(result));
   return std::get<algorithm_trainer::SubmissionRecord>(std::move(result));
+}
+
+void set_completion_day(const std::filesystem::path &database,
+                        algorithm_trainer::SubmissionId submission_id,
+                        std::string_view day_modifier) {
+  sqlite3 *connection{};
+  REQUIRE(sqlite3_open(database.c_str(), &connection) == SQLITE_OK);
+
+  sqlite3_stmt *statement{};
+  REQUIRE(sqlite3_prepare_v2(connection,
+                             "UPDATE submissions SET completed_at = "
+                             "strftime('%Y-%m-%dT12:00:00.000Z', 'now', ?) WHERE id = ?;",
+                             -1, &statement, nullptr) == SQLITE_OK);
+  REQUIRE(sqlite3_bind_text(statement, 1, day_modifier.data(),
+                            static_cast<int>(day_modifier.size()), SQLITE_TRANSIENT) == SQLITE_OK);
+  REQUIRE(sqlite3_bind_int64(statement, 2, submission_id.value) == SQLITE_OK);
+  REQUIRE(sqlite3_step(statement) == SQLITE_DONE);
+  sqlite3_finalize(statement);
+  sqlite3_close(connection);
 }
 
 } // namespace
@@ -244,14 +264,26 @@ TEST_CASE("SQLite derives user progress from accepted submissions", "[sqlite]") 
   static_cast<void>(
       stored_record(repository->complete(other_record.id, algorithm_trainer::Verdict::accepted)));
 
+  set_completion_day(directory.database(), first_record.id, "-2 days");
+  set_completion_day(directory.database(), second_record.id, "-1 day");
+  set_completion_day(directory.database(), other_record.id, "0 days");
+
   const auto result = repository->progress(user_id);
 
   REQUIRE(std::holds_alternative<algorithm_trainer::UserProgress>(result));
   const auto &progress = std::get<algorithm_trainer::UserProgress>(result);
   CHECK(progress.total_submissions == 4);
   CHECK(progress.accepted_submissions == 3);
+  CHECK(progress.current_streak_days == 3);
   REQUIRE(progress.completed_problems.size() == 2);
   CHECK(std::ranges::any_of(progress.completed_problems, [](const auto &completed) {
     return completed.problem_id == "a-plus-b";
   }));
+
+  set_completion_day(directory.database(), first_record.id, "-5 days");
+  set_completion_day(directory.database(), second_record.id, "-4 days");
+  set_completion_day(directory.database(), other_record.id, "-3 days");
+  const auto stale_result = repository->progress(user_id);
+  REQUIRE(std::holds_alternative<algorithm_trainer::UserProgress>(stale_result));
+  CHECK(std::get<algorithm_trainer::UserProgress>(stale_result).current_streak_days == 0);
 }

@@ -131,6 +131,7 @@ type ProfileData = {
     totalSubmissions: number;
     acceptedSubmissions: number;
     completedProblems: number;
+    currentStreakDays: number;
   };
   completedProblems: Array<{
     id: string;
@@ -531,6 +532,7 @@ export function App() {
                   <div><dt>Submissions</dt><dd>{profile.activity.totalSubmissions}</dd></div>
                   <div><dt>Accepted</dt><dd>{profile.activity.acceptedSubmissions}</dd></div>
                   <div><dt>Problems completed</dt><dd>{profile.activity.completedProblems}</dd></div>
+                  <div><dt>Current streak</dt><dd>{profile.activity.currentStreakDays} {profile.activity.currentStreakDays === 1 ? "day" : "days"}</dd></div>
                 </dl>
               </section>
 

@@ -398,6 +398,25 @@ UserProgressResult SQLiteSubmissionRepository::progress(std::int64_t user_id) {
       .total_submissions = sqlite3_column_int64(totals.get(), 0),
       .accepted_submissions = sqlite3_column_int64(totals.get(), 1),
   };
+  Statement streak{
+      implementation_->database,
+      "WITH days AS ("
+      " SELECT DISTINCT date(completed_at) AS day FROM submissions"
+      " WHERE user_id = ? AND verdict = 'Accepted' AND completed_at IS NOT NULL"
+      "), ordered AS ("
+      " SELECT day, CAST(julianday((SELECT MAX(day) FROM days)) - julianday(day) AS INTEGER)"
+      " AS distance, ROW_NUMBER() OVER (ORDER BY day DESC) - 1 AS position FROM days"
+      ") SELECT CASE WHEN COALESCE((SELECT MAX(day) FROM days), '') < date('now', '-1 day')"
+      " THEN 0 ELSE COUNT(CASE WHEN distance = position THEN 1 END) END FROM ordered;"};
+  if (!streak.valid()) {
+    return RepositoryError{streak.error()};
+  }
+  sqlite3_bind_int64(streak.get(), 1, user_id);
+  if (sqlite3_step(streak.get()) != SQLITE_ROW) {
+    return database_error(implementation_->database, "Could not retrieve user streak");
+  }
+  progress.current_streak_days = sqlite3_column_int64(streak.get(), 0);
+
   Statement completed{implementation_->database,
                       "SELECT problem_id, MIN(completed_at) FROM submissions "
                       "WHERE user_id = ? AND verdict = 'Accepted' AND completed_at IS NOT NULL "

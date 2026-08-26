@@ -296,6 +296,7 @@ void profile(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
   body["user"] = user_to_json(user);
   body["activity"]["totalSubmissions"] = Json::Int64{progress.total_submissions};
   body["activity"]["acceptedSubmissions"] = Json::Int64{progress.accepted_submissions};
+  body["activity"]["currentStreakDays"] = Json::Int64{progress.current_streak_days};
   body["activity"]["completedProblems"] =
       Json::Int64{static_cast<std::int64_t>(progress.completed_problems.size())};
   body["completedProblems"] = Json::Value{Json::arrayValue};

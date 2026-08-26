@@ -41,6 +41,7 @@ struct CompletedProblem {
 struct UserProgress {
   std::int64_t total_submissions{};
   std::int64_t accepted_submissions{};
+  std::int64_t current_streak_days{};
   std::vector<CompletedProblem> completed_problems;
 };
 
