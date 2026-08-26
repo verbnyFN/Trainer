@@ -58,9 +58,16 @@ ALGORITHM_TRAINER_DATABASE=/absolute/path/to/database.sqlite3 \
   nix develop --command ./build/backend/algorithm-trainer-backend
 ```
 
+When the backend is served over HTTPS, set `ALGORITHM_TRAINER_SECURE_COOKIES=1` so authentication
+cookies carry the `Secure` attribute. Leave it unset only for plain-HTTP local development.
+
 ## API
 
 ```text
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me
 GET  /api/problems/:slug
 POST /api/submissions
 GET  /api/submissions/:id
@@ -91,6 +98,6 @@ environment, networking, processes, memory, CPU, wall time, and output. See
 
 ## Current scope
 
-The MVP supports one problem and Python submissions only. Judging is synchronous. Authentication,
-profiles, queues, additional languages, and distributed execution are intentionally outside the
-current scope.
+The MVP supports one problem, Python submissions, and username/password authentication. Judging is
+synchronous. Profiles, password recovery, OAuth, queues, additional languages, and distributed
+execution are intentionally outside the current scope.

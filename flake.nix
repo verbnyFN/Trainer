@@ -35,6 +35,7 @@
           pkg-config
           pnpm
           python3
+          libsodium
           sqlite
         ];
 

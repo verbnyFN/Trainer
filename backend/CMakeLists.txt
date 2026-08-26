@@ -3,10 +3,13 @@
 set(CMAKE_CXX_STANDARD 20)
 find_package(Drogon CONFIG REQUIRED)
 unset(CMAKE_CXX_STANDARD)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(Sodium REQUIRED IMPORTED_TARGET libsodium)
 
 add_library(
   algorithm-trainer-core
   src/a-plus-b-judge.cpp
+  src/auth-service.cpp
   src/judge.cpp
   src/mock-judge.cpp
   src/nsjail-python-executor.cpp
@@ -36,7 +39,7 @@ target_compile_definitions(
 )
 target_compile_features(algorithm-trainer-core PUBLIC cxx_std_20)
 target_include_directories(algorithm-trainer-core PUBLIC include)
-target_link_libraries(algorithm-trainer-core PUBLIC Drogon::Drogon SQLite3_lib)
+target_link_libraries(algorithm-trainer-core PUBLIC Drogon::Drogon PkgConfig::Sodium SQLite3_lib)
 
 add_executable(algorithm-trainer-backend src/main.cpp)
 target_compile_features(algorithm-trainer-backend PRIVATE cxx_std_20)
@@ -48,6 +51,7 @@ if(BUILD_TESTING)
   add_executable(
     algorithm-trainer-tests
     tests/a-plus-b-judge-test.cpp
+    tests/auth-service-test.cpp
     tests/judge-test.cpp
     tests/problem-test.cpp
     tests/smoke-test.cpp

@@ -1,7 +1,7 @@
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 loader.config({ monaco });
 
@@ -34,12 +34,25 @@ type ErrorResponse = {
   error?: string;
 };
 
+type AuthUser = {
+  id: number;
+  username: string;
+  createdAt: string;
+};
+
+type AuthMode = "login" | "register";
+
 export function App() {
   const [code, setCode] = useState(starterCode);
   const [message, setMessage] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [problem, setProblem] = useState<Problem>();
   const [problemError, setProblemError] = useState<string>();
+  const [user, setUser] = useState<AuthUser>();
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string>();
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -69,6 +82,85 @@ export function App() {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function restoreSession() {
+      try {
+        const response = await fetch("/api/auth/me", {
+          credentials: "include",
+          signal: controller.signal,
+        });
+        if (response.ok) {
+          setUser((await response.json()) as AuthUser);
+        } else if (response.status !== 401) {
+          const result = (await response.json()) as ErrorResponse;
+          setAuthError(result.error ?? "Authentication state could not be loaded");
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setAuthError("Authentication state could not be loaded");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setAuthLoading(false);
+        }
+      }
+    }
+
+    void restoreSession();
+    return () => controller.abort();
+  }, []);
+
+  async function authenticate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthSubmitting(true);
+    setAuthError(undefined);
+    const form = new FormData(event.currentTarget);
+
+    try {
+      const response = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: form.get("username"),
+          password: form.get("password"),
+        }),
+      });
+      const result = (await response.json()) as AuthUser | ErrorResponse;
+      if (!response.ok) {
+        throw new Error((result as ErrorResponse).error ?? "Authentication failed");
+      }
+      setUser(result as AuthUser);
+      event.currentTarget.reset();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function logout() {
+    setAuthSubmitting(true);
+    setAuthError(undefined);
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const result = (await response.json()) as ErrorResponse;
+        throw new Error(result.error ?? "Logout failed");
+      }
+      setUser(undefined);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Logout failed");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
   async function submit() {
     if (problem === undefined) {
       return;
@@ -80,6 +172,7 @@ export function App() {
     try {
       const response = await fetch("/api/submissions", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           problemId: problem.id,
@@ -102,7 +195,55 @@ export function App() {
   }
 
   return (
-    <main className="workspace">
+    <div className="app-shell">
+      <header className="auth-bar" aria-label="Account">
+        <strong>Algorithm Trainer</strong>
+        {authLoading ? (
+          <span role="status">Checking session…</span>
+        ) : user !== undefined ? (
+          <div className="account-summary">
+            <span>
+              Signed in as <strong>{user.username}</strong>
+            </span>
+            <button type="button" className="secondary-button" onClick={logout} disabled={authSubmitting}>
+              {authSubmitting ? "Signing out…" : "Logout"}
+            </button>
+          </div>
+        ) : (
+          <form className="auth-form" onSubmit={authenticate}>
+            <label>
+              <span className="visually-hidden">Username</span>
+              <input name="username" type="text" autoComplete="username" placeholder="Username" required />
+            </label>
+            <label>
+              <span className="visually-hidden">Password</span>
+              <input
+                name="password"
+                type="password"
+                autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                placeholder="Password"
+                required
+              />
+            </label>
+            <button type="submit" disabled={authSubmitting}>
+              {authSubmitting ? "Please wait…" : authMode === "login" ? "Login" : "Register"}
+            </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setAuthMode(authMode === "login" ? "register" : "login");
+                setAuthError(undefined);
+              }}
+            >
+              {authMode === "login" ? "Create account" : "Use login"}
+            </button>
+          </form>
+        )}
+        {authError !== undefined && <p className="auth-error" role="alert">{authError}</p>}
+      </header>
+
+      <main className="workspace">
       <section className="problem" aria-labelledby="problem-title">
         {problem === undefined ? (
           <div className="problem-state" role="status">
@@ -179,6 +320,7 @@ export function App() {
           </button>
         </footer>
       </section>
-    </main>
+      </main>
+    </div>
   );
 }
