@@ -6,12 +6,14 @@ namespace algorithm_trainer {
 
 std::string_view submission_status_name(SubmissionStatus status) {
   switch (status) {
-  case SubmissionStatus::pending:
-    return "pending";
+  case SubmissionStatus::queued:
+    return "Queued";
+  case SubmissionStatus::running:
+    return "Running";
   case SubmissionStatus::completed:
-    return "completed";
+    return "Completed";
   case SubmissionStatus::failed:
-    return "failed";
+    return "Failed";
   }
   throw std::logic_error{"Unknown submission status"};
 }

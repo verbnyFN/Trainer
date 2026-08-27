@@ -5,6 +5,7 @@
 #include "algorithm-trainer/sqlite-submission-repository.h"
 #include "algorithm-trainer/submission-record.h"
 #include "algorithm-trainer/submission-service.h"
+#include "algorithm-trainer/submission-worker.h"
 #include "algorithm-trainer/submission.h"
 
 #include <drogon/drogon.h>
@@ -216,7 +217,10 @@ void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
   }
   auto result = submission_service.submit(submission);
   if (const auto *submission = std::get_if<algorithm_trainer::SubmissionRecord>(&result)) {
-    callback(drogon::HttpResponse::newHttpJsonResponse(submission_to_json(*submission, false)));
+    auto response =
+        drogon::HttpResponse::newHttpJsonResponse(submission_to_json(*submission, false));
+    response->setStatusCode(drogon::k202Accepted);
+    callback(response);
     return;
   }
 
@@ -371,7 +375,13 @@ int main() {
   }
   auto repository = std::get<std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>>(
       std::move(repository_result));
-  algorithm_trainer::SubmissionService submission_service{judge, *repository};
+  algorithm_trainer::SubmissionWorkerPool worker_pool{judge, *repository, 2};
+  if (const auto error = worker_pool.start()) {
+    LOG_ERROR << "Submission worker startup failed: " << *error;
+    return 1;
+  }
+  algorithm_trainer::SubmissionService submission_service{*repository,
+                                                          [&worker_pool] { worker_pool.notify(); }};
   auto auth_result = algorithm_trainer::AuthService::open(database_path);
   if (const auto *error = std::get_if<algorithm_trainer::AuthError>(&auth_result)) {
     LOG_ERROR << "Authentication initialization failed: " << error->message;

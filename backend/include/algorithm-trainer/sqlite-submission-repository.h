@@ -24,6 +24,8 @@ public:
                                  std::optional<std::string> error_type = std::nullopt) override;
   StoreSubmissionResult fail(SubmissionId submission_id,
                              std::optional<std::string> error_type = std::nullopt) override;
+  ClaimSubmissionResult claim_next() override;
+  RecoverSubmissionsResult recover_running() override;
   FindSubmissionResult find(SubmissionId submission_id) override;
   SubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id) override;
   UserProgressResult progress(std::int64_t user_id) override;

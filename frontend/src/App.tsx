@@ -80,6 +80,7 @@ type SubmissionResponse = {
   verdict?: string;
   errorType?: string;
   language?: string;
+  code?: string;
   createdAt?: string;
 };
 
@@ -428,7 +429,7 @@ export function App() {
         throw new Error(result.error ?? "Submission was rejected");
       }
 
-      setMessage(result.verdict ?? "Submission completed");
+      setMessage(result.status ?? "Queued");
       setMostRecentProblemId(problem.id);
       if (user !== undefined && result.id !== undefined && result.language !== undefined && result.createdAt !== undefined) {
         setHistory((current) => [
@@ -436,7 +437,7 @@ export function App() {
             id: result.id!,
             language: result.language!,
             code,
-            status: result.status ?? "completed",
+            status: result.status ?? "Queued",
             verdict: result.verdict,
             errorType: result.errorType,
             createdAt: result.createdAt!,
@@ -444,10 +445,51 @@ export function App() {
           ...current.filter((entry) => entry.id !== result.id),
         ]);
       }
+      if (result.id !== undefined) {
+        void pollSubmission(result.id, code);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Submission failed");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function pollSubmission(submissionId: number, submittedCode: string) {
+    while (true) {
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      try {
+        const response = await fetch(`/api/submissions/${submissionId}`, {
+          credentials: "include",
+        });
+        const result = (await response.json()) as SubmissionResponse;
+        if (!response.ok) {
+          throw new Error(result.error ?? "Submission status could not be retrieved");
+        }
+
+        const status = result.status ?? "Queued";
+        setMessage(result.errorType ?? result.verdict ?? status);
+        if (user !== undefined && result.language !== undefined && result.createdAt !== undefined) {
+          setHistory((current) => [
+            {
+              id: submissionId,
+              language: result.language!,
+              code: result.code ?? submittedCode,
+              status,
+              verdict: result.verdict,
+              errorType: result.errorType,
+              createdAt: result.createdAt!,
+            },
+            ...current.filter((entry) => entry.id !== submissionId),
+          ]);
+        }
+        if (status === "Completed" || status === "Failed") {
+          return;
+        }
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Submission status could not be retrieved");
+        return;
+      }
     }
   }
 
@@ -694,7 +736,7 @@ export function App() {
                 ) : (
                   <ul className="history-list">
                     {history.map((entry) => {
-                      const result = entry.errorType ?? entry.verdict ?? (entry.status === "failed" ? "Judge Error" : "Pending");
+                      const result = entry.errorType ?? entry.verdict ?? entry.status;
                       return (
                         <li key={entry.id}>
                           <details>

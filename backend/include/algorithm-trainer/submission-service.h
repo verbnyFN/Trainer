@@ -1,10 +1,10 @@
 #pragma once
 
-#include "algorithm-trainer/judge.h"
 #include "algorithm-trainer/submission-record.h"
 #include "algorithm-trainer/submission-repository.h"
 #include "algorithm-trainer/submission.h"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -24,7 +24,8 @@ using GetUserProgressResult = std::variant<UserProgress, SubmissionServiceError>
 
 class SubmissionService {
 public:
-  SubmissionService(Judge &judge, SubmissionRepository &repository);
+  explicit SubmissionService(SubmissionRepository &repository,
+                             std::function<void()> queue_notifier = {});
 
   SubmitResult submit(const SubmissionRequest &submission);
   GetSubmissionResult find(SubmissionId submission_id);
@@ -32,8 +33,8 @@ public:
   GetUserProgressResult progress(std::int64_t user_id);
 
 private:
-  Judge &judge_;
   SubmissionRepository &repository_;
+  std::function<void()> queue_notifier_;
 };
 
 } // namespace algorithm_trainer

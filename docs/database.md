@@ -18,16 +18,19 @@ HTTP listener starts; the backend exits instead of serving requests if initializ
 
 ## Submission lifecycle
 
-Valid requests follow one synchronous state transition:
+Valid requests are persisted before judging and follow these asynchronous transitions:
 
 ```text
-pending → completed
-        ↘ failed
+queued → running → completed
+                 ↘ failed
 ```
 
-`completed` means judging produced a solution verdict. `failed` means the judge infrastructure failed,
-not that the submitted solution was wrong. Database constraints and guarded SQL updates prevent
-completed or failed submissions from being transitioned again.
+Workers atomically claim the oldest queued row, which prevents concurrent workers from processing the
+same submission. Interrupted running rows are returned to the queue when the worker pool starts, so
+work survives backend restarts. `completed` means judging produced a solution verdict. `failed` means
+the judge or worker infrastructure failed, not that the submitted solution was wrong. Database
+constraints and guarded SQL updates prevent completed or failed submissions from being transitioned
+again.
 
 Authenticated submissions store the owning user id. History queries require both that id and the
 problem id, so records belonging to another account or problem are excluded by the database query.
@@ -44,8 +47,9 @@ Migrations live in `migrations/` and applied versions are recorded in `schema_mi
 `001-create-submissions.sql` creates the initial submissions table, `002-create-auth.sql` adds users
 and sessions, and `003-link-submissions-to-users.sql` adds submission ownership and the history
 index. `004-add-submission-error-type.sql` adds normalized runtime-error categories. Migrations are
-applied in version order inside transactions and should never be edited after deployment; add a new
-numbered migration instead.
+applied in version order inside transactions. `005-add-submission-queue.sql` introduces the persistent
+queued and running states and migrates legacy pending rows into the queue. Existing migrations should
+never be edited after deployment; add a new numbered migration instead.
 
 SQLite foreign-key enforcement is enabled and connections use a five-second busy timeout. SQL values
 are always bound through prepared statements, including source code containing quotes or embedded NUL

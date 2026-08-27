@@ -137,8 +137,11 @@ std::optional<Verdict> parse_verdict(std::string_view value) {
 }
 
 std::optional<SubmissionStatus> parse_status(std::string_view value) {
-  if (value == "pending") {
-    return SubmissionStatus::pending;
+  if (value == "queued") {
+    return SubmissionStatus::queued;
+  }
+  if (value == "running") {
+    return SubmissionStatus::running;
   }
   if (value == "completed") {
     return SubmissionStatus::completed;
@@ -256,13 +259,16 @@ SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
   if (const auto error = apply_migration(database, 4, "004-add-submission-error-type.sql")) {
     return *error;
   }
+  if (const auto error = apply_migration(database, 5, "005-add-submission-queue.sql")) {
+    return *error;
+  }
   return std::unique_ptr<SQLiteSubmissionRepository>{
       new SQLiteSubmissionRepository{std::move(implementation)}};
 }
 
 StoreSubmissionResult SQLiteSubmissionRepository::create(const SubmissionRequest &request) {
   const auto sql = "INSERT INTO submissions(problem_id, language, source_code, status, created_at, "
-                   "user_id) VALUES (?, ?, ?, 'pending', "
+                   "user_id) VALUES (?, ?, ?, 'queued', "
                    "strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?) "
                    "RETURNING " +
                    std::string{returned_columns} + ';';
@@ -289,7 +295,7 @@ StoreSubmissionResult SQLiteSubmissionRepository::complete(SubmissionId submissi
                                                            std::optional<std::string> error_type) {
   const auto sql = "UPDATE submissions SET status = 'completed', verdict = ?, "
                    "error_type = ?, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                   "WHERE id = ? AND status = 'pending' RETURNING " +
+                   "WHERE id = ? AND status = 'running' RETURNING " +
                    std::string{returned_columns} + ';';
   Statement statement{implementation_->database, sql};
   if (!statement.valid()) {
@@ -305,7 +311,7 @@ StoreSubmissionResult SQLiteSubmissionRepository::complete(SubmissionId submissi
   }
   sqlite3_bind_int64(statement.get(), 3, submission_id.value);
   if (sqlite3_step(statement.get()) != SQLITE_ROW) {
-    return RepositoryError{"Submission is missing or is not pending"};
+    return RepositoryError{"Submission is missing or is not running"};
   }
   return read_record(statement.get());
 }
@@ -314,7 +320,7 @@ StoreSubmissionResult SQLiteSubmissionRepository::fail(SubmissionId submission_i
                                                        std::optional<std::string> error_type) {
   const auto sql = "UPDATE submissions SET status = 'failed', error_type = ?, "
                    "completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                   "WHERE id = ? AND status = 'pending' RETURNING " +
+                   "WHERE id = ? AND status = 'running' RETURNING " +
                    std::string{returned_columns} + ';';
   Statement statement{implementation_->database, sql};
   if (!statement.valid()) {
@@ -327,9 +333,44 @@ StoreSubmissionResult SQLiteSubmissionRepository::fail(SubmissionId submission_i
   }
   sqlite3_bind_int64(statement.get(), 2, submission_id.value);
   if (sqlite3_step(statement.get()) != SQLITE_ROW) {
-    return RepositoryError{"Submission is missing or is not pending"};
+    return RepositoryError{"Submission is missing or is not running"};
   }
   return read_record(statement.get());
+}
+
+ClaimSubmissionResult SQLiteSubmissionRepository::claim_next() {
+  const auto sql = "UPDATE submissions SET status = 'running' WHERE id = ("
+                   "SELECT id FROM submissions WHERE status = 'queued' ORDER BY id LIMIT 1"
+                   ") AND status = 'queued' RETURNING " +
+                   std::string{returned_columns} + ';';
+  Statement statement{implementation_->database, sql};
+  if (!statement.valid()) {
+    return RepositoryError{statement.error()};
+  }
+  const auto result = sqlite3_step(statement.get());
+  if (result == SQLITE_DONE) {
+    return std::optional<SubmissionRecord>{};
+  }
+  if (result != SQLITE_ROW) {
+    return database_error(implementation_->database, "Could not claim queued submission");
+  }
+  auto record = read_record(statement.get());
+  if (const auto *error = std::get_if<RepositoryError>(&record)) {
+    return *error;
+  }
+  return std::optional<SubmissionRecord>{std::get<SubmissionRecord>(std::move(record))};
+}
+
+RecoverSubmissionsResult SQLiteSubmissionRepository::recover_running() {
+  Statement statement{implementation_->database,
+                      "UPDATE submissions SET status = 'queued' WHERE status = 'running';"};
+  if (!statement.valid()) {
+    return RepositoryError{statement.error()};
+  }
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    return database_error(implementation_->database, "Could not recover running submissions");
+  }
+  return static_cast<std::size_t>(sqlite3_changes(implementation_->database));
 }
 
 FindSubmissionResult SQLiteSubmissionRepository::find(SubmissionId submission_id) {

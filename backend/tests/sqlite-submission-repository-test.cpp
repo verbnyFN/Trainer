@@ -67,6 +67,15 @@ algorithm_trainer::SubmissionRecord stored_record(algorithm_trainer::StoreSubmis
   return std::get<algorithm_trainer::SubmissionRecord>(std::move(result));
 }
 
+algorithm_trainer::SubmissionRecord
+claim_record(algorithm_trainer::SubmissionRepository &repository) {
+  auto result = repository.claim_next();
+  REQUIRE(std::holds_alternative<std::optional<algorithm_trainer::SubmissionRecord>>(result));
+  auto claimed = std::get<std::optional<algorithm_trainer::SubmissionRecord>>(std::move(result));
+  REQUIRE(claimed.has_value());
+  return std::move(*claimed);
+}
+
 void set_completion_day(const std::filesystem::path &database,
                         algorithm_trainer::SubmissionId submission_id,
                         std::string_view day_modifier) {
@@ -93,11 +102,13 @@ TEST_CASE("SQLite creates and completes a submission", "[sqlite]") {
   auto repository = open_repository(directory.database());
 
   const auto pending = stored_record(repository->create(submission()));
+  const auto running = claim_record(*repository);
   const auto completed =
-      stored_record(repository->complete(pending.id, algorithm_trainer::Verdict::accepted));
+      stored_record(repository->complete(running.id, algorithm_trainer::Verdict::accepted));
 
   CHECK(pending.id.value > 0);
-  CHECK(pending.status == algorithm_trainer::SubmissionStatus::pending);
+  CHECK(pending.status == algorithm_trainer::SubmissionStatus::queued);
+  CHECK(running.status == algorithm_trainer::SubmissionStatus::running);
   CHECK_FALSE(pending.verdict.has_value());
   CHECK(completed.status == algorithm_trainer::SubmissionStatus::completed);
   CHECK(completed.verdict == algorithm_trainer::Verdict::accepted);
@@ -133,7 +144,9 @@ TEST_CASE("SQLite persists every public verdict", "[sqlite]") {
 
   for (const auto verdict : verdicts) {
     const auto pending = stored_record(repository->create(submission()));
-    const auto completed = stored_record(repository->complete(pending.id, verdict));
+    const auto running = claim_record(*repository);
+    CHECK(running.id == pending.id);
+    const auto completed = stored_record(repository->complete(running.id, verdict));
     CHECK(completed.verdict == verdict);
   }
 }
@@ -142,9 +155,10 @@ TEST_CASE("SQLite persists normalized runtime error types", "[sqlite]") {
   TemporaryDirectory directory;
   auto repository = open_repository(directory.database());
   const auto pending = stored_record(repository->create(submission()));
+  const auto running = claim_record(*repository);
 
   const auto completed = stored_record(
-      repository->complete(pending.id, algorithm_trainer::Verdict::runtime_error, "Syntax Error"));
+      repository->complete(running.id, algorithm_trainer::Verdict::runtime_error, "Syntax Error"));
   const auto found = repository->find(pending.id);
 
   CHECK(completed.error_type == "Syntax Error");
@@ -176,8 +190,9 @@ TEST_CASE("SQLite records failed judging and prevents repeated transitions", "[s
   TemporaryDirectory directory;
   auto repository = open_repository(directory.database());
   const auto pending = stored_record(repository->create(submission()));
+  const auto running = claim_record(*repository);
 
-  const auto failed = stored_record(repository->fail(pending.id));
+  const auto failed = stored_record(repository->fail(running.id));
   const auto repeated = repository->complete(pending.id, algorithm_trainer::Verdict::accepted);
 
   CHECK(failed.status == algorithm_trainer::SubmissionStatus::failed);
@@ -255,12 +270,23 @@ TEST_CASE("SQLite derives user progress from accepted submissions", "[sqlite]") 
   const auto second_record = stored_record(repository->create(second));
   const auto wrong_record = stored_record(repository->create(wrong));
   const auto other_record = stored_record(repository->create(other_problem));
+  const auto queued_progress_result = repository->progress(user_id);
+  REQUIRE(std::holds_alternative<algorithm_trainer::UserProgress>(queued_progress_result));
+  const auto &queued_progress = std::get<algorithm_trainer::UserProgress>(queued_progress_result);
+  CHECK(queued_progress.total_submissions == 4);
+  CHECK(queued_progress.accepted_submissions == 0);
+  CHECK(queued_progress.completed_problems.empty());
+
+  CHECK(claim_record(*repository).id == first_record.id);
   static_cast<void>(
       stored_record(repository->complete(first_record.id, algorithm_trainer::Verdict::accepted)));
+  CHECK(claim_record(*repository).id == second_record.id);
   static_cast<void>(
       stored_record(repository->complete(second_record.id, algorithm_trainer::Verdict::accepted)));
+  CHECK(claim_record(*repository).id == wrong_record.id);
   static_cast<void>(stored_record(
       repository->complete(wrong_record.id, algorithm_trainer::Verdict::wrong_answer)));
+  CHECK(claim_record(*repository).id == other_record.id);
   static_cast<void>(
       stored_record(repository->complete(other_record.id, algorithm_trainer::Verdict::accepted)));
 

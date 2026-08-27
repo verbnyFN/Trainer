@@ -18,6 +18,7 @@ add_library(
   src/submission.cpp
   src/submission-record.cpp
   src/submission-service.cpp
+  src/submission-worker.cpp
 )
 
 foreach(runtime_variable IN ITEMS
@@ -62,6 +63,7 @@ if(BUILD_TESTING)
     tests/sqlite-submission-repository-test.cpp
     tests/submission-service-test.cpp
     tests/submission-test.cpp
+    tests/submission-worker-test.cpp
   )
   target_compile_features(algorithm-trainer-tests PRIVATE cxx_std_20)
   target_link_libraries(

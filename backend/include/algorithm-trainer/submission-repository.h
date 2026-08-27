@@ -20,6 +20,8 @@ using StoreSubmissionResult = std::variant<SubmissionRecord, RepositoryError>;
 using FindSubmissionResult = std::variant<std::optional<SubmissionRecord>, RepositoryError>;
 using SubmissionHistoryResult = std::variant<std::vector<SubmissionRecord>, RepositoryError>;
 using UserProgressResult = std::variant<UserProgress, RepositoryError>;
+using ClaimSubmissionResult = std::variant<std::optional<SubmissionRecord>, RepositoryError>;
+using RecoverSubmissionsResult = std::variant<std::size_t, RepositoryError>;
 
 class SubmissionRepository {
 public:
@@ -30,6 +32,8 @@ public:
                                          std::optional<std::string> error_type = std::nullopt) = 0;
   virtual StoreSubmissionResult fail(SubmissionId submission_id,
                                      std::optional<std::string> error_type = std::nullopt) = 0;
+  virtual ClaimSubmissionResult claim_next() = 0;
+  virtual RecoverSubmissionsResult recover_running() = 0;
   virtual FindSubmissionResult find(SubmissionId submission_id) = 0;
   virtual SubmissionHistoryResult history(std::int64_t user_id, const std::string &problem_id) = 0;
   virtual UserProgressResult progress(std::int64_t user_id) = 0;
