@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -16,6 +17,7 @@ struct ExecutionResult {
   std::string standard_output;
   std::string standard_error;
   bool timed_out{};
+  std::optional<std::string> error_type;
 };
 
 struct ExecutorError {

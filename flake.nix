@@ -10,6 +10,9 @@
       pythonRuntimeClosure = pkgs.closureInfo {
         rootPaths = [ pkgs.python3 ];
       };
+      cppRuntimeClosure = pkgs.closureInfo {
+        rootPaths = [ pkgs.clang pkgs.gcc.cc ];
+      };
       nsjailWithVersion = pkgs.writeShellScriptBin "nsjail" ''
         if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
           echo "nsjail ${pkgs.lib.getVersion pkgs.nsjail}"
@@ -42,6 +45,8 @@
         ALGORITHM_TRAINER_NSJAIL_PATH = "${pkgs.nsjail}/bin/nsjail";
         ALGORITHM_TRAINER_PYTHON_PATH = "${pkgs.python3}/bin/python3";
         ALGORITHM_TRAINER_PYTHON_RUNTIME_CLOSURE = "${pythonRuntimeClosure}/store-paths";
+        ALGORITHM_TRAINER_CPP_COMPILER_PATH = "${pkgs.clang}/bin/clang++";
+        ALGORITHM_TRAINER_CPP_RUNTIME_CLOSURE = "${cppRuntimeClosure}/store-paths";
       };
     };
 }

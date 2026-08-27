@@ -118,6 +118,11 @@ pre {
   gap: 0.65rem;
 }
 
+.account-navigation {
+  display: flex;
+  gap: 0.25rem;
+}
+
 .auth-form input {
   width: 10rem;
   padding: 0.65rem 0.75rem;
@@ -189,6 +194,92 @@ pre {
   min-height: calc(100vh - 4.5rem);
   margin: 0 auto;
   padding: clamp(2rem, 6vw, 5rem);
+}
+
+.problems-page {
+  width: min(960px, calc(100% - 2rem));
+  min-height: calc(100vh - 4.5rem);
+  margin: 0 auto;
+  padding: clamp(2rem, 6vw, 5rem);
+}
+
+.problems-heading h1 {
+  margin: 0;
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  letter-spacing: -0.05em;
+}
+
+.problems-heading > p:last-child {
+  color: #66758b;
+}
+
+.problem-list {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 2rem;
+  padding: 0;
+  list-style: none;
+}
+
+.problem-list > li > button {
+  display: grid;
+  width: 100%;
+  gap: 0.8rem;
+  padding: 1.25rem 1.4rem;
+  border: 1px solid #dfe5ed;
+  color: #172033;
+  background: #ffffff;
+  text-align: left;
+}
+
+.problem-list > li > button:hover {
+  border-color: #9aacec;
+  background: #f7f9ff;
+}
+
+.problem-list-title,
+.problem-tags {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.problem-list-title {
+  justify-content: space-between;
+  font-size: 1.1rem;
+}
+
+.difficulty,
+.problem-tags span {
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.difficulty-easy {
+  color: #16724b;
+  background: #e6f6ef;
+}
+
+.difficulty-medium {
+  color: #91610b;
+  background: #fff4d6;
+}
+
+.difficulty-hard {
+  color: #9b1c1c;
+  background: #fff0f0;
+}
+
+.problem-tags {
+  flex-wrap: wrap;
+}
+
+.problem-tags span {
+  color: #52627a;
+  background: #eef2f7;
+  font-weight: 600;
 }
 
 .profile-page h1 {
@@ -423,8 +514,21 @@ pre {
   margin: 0;
 }
 
-.solution-header span {
+.language-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.language-selector span {
+  color: #66758b;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.language-selector select {
   padding: 0.35rem 0.65rem;
+  border: 1px solid #dfe5ed;
   border-radius: 999px;
   color: #40516b;
   background: #eef2f7;
@@ -436,6 +540,11 @@ pre {
   min-height: 0;
   overflow: hidden;
   background: #1e1e1e;
+}
+
+.monaco-editor .pink-word-highlight {
+  color: #ff69b4 !important;
+  font-weight: 700;
 }
 
 .submission-bar {

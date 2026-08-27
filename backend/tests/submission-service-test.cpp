@@ -273,7 +273,7 @@ TEST_CASE("invalid submissions never reach persistence or judging", "[submission
 
   SECTION("missing code") { json.removeMember("code"); }
   SECTION("unsupported problem") { json["problemId"] = "another-problem"; }
-  SECTION("unsupported language") { json["language"] = "cpp"; }
+  SECTION("unsupported language") { json["language"] = "rust"; }
   SECTION("empty code") { json["code"] = ""; }
 
   const auto validation = algorithm_trainer::validate_submission(json);

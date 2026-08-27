@@ -69,6 +69,7 @@ POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
 GET  /api/profile
+GET  /api/problems
 GET  /api/problems/:slug
 GET  /api/problems/:slug/submissions
 POST /api/submissions
@@ -93,14 +94,15 @@ Hidden test cases and sandbox diagnostics are never returned through the API.
 - `docs/database.md`: submission persistence details
 - `docs/sandbox.md`: isolation model, exact limits, host requirements, and known limitations
 
-Python submissions are passed through the `Executor` abstraction to NsJail. There is no unsandboxed
-fallback. Each hidden case runs in a fresh temporary workspace with restricted filesystem,
-environment, networking, processes, memory, CPU, wall time, and output. See
+Python and C++20 submissions are passed through the `Executor` abstraction to NsJail. C++ source is
+compiled inside a restricted sandbox before the resulting binary is executed; there is no
+unsandboxed fallback. Each hidden case runs in a fresh temporary workspace with restricted
+filesystem, environment, networking, processes, memory, CPU, wall time, and output. See
 [`docs/sandbox.md`](docs/sandbox.md) for the complete security model.
 
 ## Current scope
 
-The MVP supports one problem, Python submissions, username/password authentication, and per-problem
-submission history for authenticated users. Judging is synchronous. Profiles, password recovery,
-OAuth, queues, additional languages, and distributed execution are intentionally outside the
-current scope.
+The MVP supports one problem, Python and C++20 submissions, username/password authentication, and
+per-problem submission history for authenticated users. Judging is synchronous. Password recovery,
+OAuth, queues, additional languages, and distributed execution are intentionally outside the current
+scope.

@@ -1,13 +1,25 @@
 import Editor, { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
+import "monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution";
 import { FormEvent, useEffect, useState } from "react";
 
 loader.config({ monaco });
 
-const starterCode = `a, b = map(int, input().split())
+const starterCode = {
+  python: `a, b = map(int, input().split())
 print(a + b)
-`;
+`,
+  cpp: `#include <iostream>
+
+int main() {
+  long long a{};
+  long long b{};
+  std::cin >> a >> b;
+  std::cout << a + b << '\\n';
+}
+`,
+};
 
 const dateFormatter = new Intl.DateTimeFormat("en-GB", {
   day: "2-digit",
@@ -27,6 +39,38 @@ function formatDate(value: string) {
 function formatDateTime(value: string) {
   const date = new Date(value);
   return `${dateFormatter.format(date).replaceAll("/", ":")} ${timeFormatter.format(date)}`;
+}
+
+function addPinkWordHighlighting(editor: monaco.editor.IStandaloneCodeEditor) {
+  const decorations = editor.createDecorationsCollection();
+  const updateDecorations = () => {
+    const model = editor.getModel();
+    if (model === null) {
+      decorations.clear();
+      return;
+    }
+    const matches = model.findMatches(
+      "\\b(?:[Mm]eow|[Cc]at|[Kk]itty|[Nn]yan|[Kk]eemo)\\b",
+      false,
+      true,
+      true,
+      null,
+      false,
+    );
+    decorations.set(
+      matches.map((match) => ({
+        range: match.range,
+        options: {
+          inlineClassName: "pink-word-highlight",
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      })),
+    );
+  };
+
+  updateDecorations();
+  editor.onDidChangeModel(updateDecorations);
+  editor.onDidChangeModelContent(updateDecorations);
 }
 
 type SubmissionResponse = {
@@ -60,9 +104,13 @@ type Problem = {
   description: string;
   inputFormat: string;
   outputFormat: string;
+  difficulty: "Easy" | "Medium" | "Hard";
+  tags: string[];
   languages: string[];
   examples: ProblemExample[];
 };
+
+type ProblemSummary = Pick<Problem, "id" | "title" | "difficulty" | "tags">;
 
 type ErrorResponse = {
   error?: string;
@@ -75,7 +123,7 @@ type AuthUser = {
 };
 
 type AuthMode = "login" | "register";
-type View = "problem" | "profile";
+type View = "problem" | "problems" | "profile";
 
 type ProfileData = {
   user: AuthUser;
@@ -92,11 +140,14 @@ type ProfileData = {
 };
 
 export function App() {
-  const [code, setCode] = useState(starterCode);
+  const [language, setLanguage] = useState<keyof typeof starterCode>("python");
+  const [sources, setSources] = useState(starterCode);
+  const code = sources[language];
   const [message, setMessage] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [problem, setProblem] = useState<Problem>();
   const [problemError, setProblemError] = useState<string>();
+  const [selectedProblemId, setSelectedProblemId] = useState("a-plus-b");
   const [user, setUser] = useState<AuthUser>();
   const [authLoading, setAuthLoading] = useState(true);
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -109,13 +160,18 @@ export function App() {
   const [profile, setProfile] = useState<ProfileData>();
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string>();
+  const [problems, setProblems] = useState<ProblemSummary[]>([]);
+  const [problemsLoading, setProblemsLoading] = useState(false);
+  const [problemsError, setProblemsError] = useState<string>();
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function loadProblem() {
+      setProblem(undefined);
+      setProblemError(undefined);
       try {
-        const response = await fetch("/api/problems/a-plus-b", {
+        const response = await fetch(`/api/problems/${selectedProblemId}`, {
           signal: controller.signal,
         });
         const result = (await response.json()) as Problem | ErrorResponse;
@@ -136,7 +192,38 @@ export function App() {
 
     void loadProblem();
     return () => controller.abort();
-  }, []);
+  }, [selectedProblemId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (view !== "problems" || user === undefined) {
+      return () => controller.abort();
+    }
+
+    async function loadProblems() {
+      setProblemsLoading(true);
+      setProblemsError(undefined);
+      try {
+        const response = await fetch("/api/problems", { signal: controller.signal });
+        const result = (await response.json()) as ProblemSummary[] | ErrorResponse;
+        if (!response.ok) {
+          throw new Error((result as ErrorResponse).error ?? "Problems could not be loaded");
+        }
+        setProblems(result as ProblemSummary[]);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setProblemsError(error instanceof Error ? error.message : "Problems could not be loaded");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setProblemsLoading(false);
+        }
+      }
+    }
+
+    void loadProblems();
+    return () => controller.abort();
+  }, [user, view]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -307,7 +394,7 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           problemId: problem.id,
-          language: "python",
+          language,
           code,
         }),
       });
@@ -407,13 +494,14 @@ export function App() {
           <span>
             Signed in as <strong>{user.username}</strong>
           </span>
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => setView(view === "problem" ? "profile" : "problem")}
-          >
-            {view === "problem" ? "Profile" : "Open problem"}
-          </button>
+          <nav className="account-navigation" aria-label="Main navigation">
+            <button type="button" className="text-button" onClick={() => setView("profile")} disabled={view === "profile"}>
+              Profile
+            </button>
+            <button type="button" className="text-button" onClick={() => setView("problems")} disabled={view === "problems"}>
+              Problems
+            </button>
+          </nav>
           <button type="button" className="secondary-button" onClick={logout} disabled={authSubmitting}>
             {authSubmitting ? "Signing out…" : "Logout"}
           </button>
@@ -463,6 +551,41 @@ export function App() {
               </section>
             </>
           ) : null}
+        </main>
+      ) : view === "problems" ? (
+        <main className="problems-page">
+          <header className="problems-heading">
+            <p className="eyebrow">Practice</p>
+            <h1>Problems</h1>
+            <p>Choose a problem to open its statement and code editor.</p>
+          </header>
+          {problemsLoading && problems.length === 0 ? (
+            <p role="status">Loading problems…</p>
+          ) : problemsError !== undefined ? (
+            <p className="profile-error" role="alert">{problemsError}</p>
+          ) : (
+            <ul className="problem-list">
+              {problems.map((entry) => (
+                <li key={entry.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedProblemId(entry.id);
+                      setView("problem");
+                    }}
+                  >
+                    <div className="problem-list-title">
+                      <strong>{entry.title}</strong>
+                      <span className={`difficulty difficulty-${entry.difficulty.toLowerCase()}`}>{entry.difficulty}</span>
+                    </div>
+                    <div className="problem-tags" aria-label="Topics">
+                      {entry.tags.map((tag) => <span key={tag}>#{tag}</span>)}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </main>
       ) : (
       <main className="workspace">
@@ -519,7 +642,7 @@ export function App() {
                                 <strong className={result === "Accepted" ? "history-success" : "history-failure"}>
                                   {result}
                                 </strong>
-                                <span>{entry.language === "python" ? "Python 3" : entry.language}</span>
+                                <span>{entry.language === "python" ? "Python 3" : entry.language === "cpp" ? "C++20" : entry.language}</span>
                               </div>
                               <time dateTime={entry.createdAt}>{formatDateTime(entry.createdAt)}</time>
                             </summary>
@@ -539,22 +662,29 @@ export function App() {
       <section className="solution" aria-labelledby="solution-title">
         <div className="solution-header">
           <h2 id="solution-title">Solution</h2>
-          <span>
-            {problem?.languages.includes("python")
-              ? "Python 3"
-              : problemError === undefined
-                ? "Loading…"
-                : "Unavailable"}
-          </span>
+          <label className="language-selector">
+            <span>Language</span>
+            <select
+              value={language}
+              onChange={(event) => setLanguage(event.target.value as keyof typeof starterCode)}
+              disabled={problem === undefined}
+            >
+              {problem?.languages.includes("python") && <option value="python">Python 3</option>}
+              {problem?.languages.includes("cpp") && <option value="cpp">C++20</option>}
+            </select>
+          </label>
         </div>
 
-        <div className="editor" aria-label="Python solution editor">
+        <div className="editor" aria-label={`${language === "python" ? "Python" : "C++"} solution editor`}>
           <Editor
             height="100%"
-            language="python"
+            language={language}
             theme="vs-dark"
             value={code}
-            onChange={(value) => setCode(value ?? "")}
+            onMount={addPinkWordHighlighting}
+            onChange={(value) =>
+              setSources((current) => ({ ...current, [language]: value ?? "" }))
+            }
             options={{
               minimap: { enabled: false },
               fontSize: 15,

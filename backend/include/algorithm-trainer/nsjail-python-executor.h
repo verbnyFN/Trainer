@@ -15,7 +15,9 @@ inline constexpr int default_python_address_space_megabytes{128};
 struct NsJailPythonExecutorConfig {
   std::filesystem::path nsjail_path;
   std::filesystem::path python_path;
-  std::filesystem::path runtime_closure_manifest;
+  std::filesystem::path python_runtime_closure_manifest;
+  std::filesystem::path cpp_compiler_path;
+  std::filesystem::path cpp_runtime_closure_manifest;
   std::chrono::milliseconds wall_time_limit{default_python_wall_time_limit};
   std::size_t output_limit_bytes{default_python_output_limit_bytes};
   int address_space_limit_megabytes{default_python_address_space_megabytes};

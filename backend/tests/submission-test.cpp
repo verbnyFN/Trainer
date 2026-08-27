@@ -33,6 +33,17 @@ TEST_CASE("a valid Python submission is accepted", "[submission]") {
   CHECK_FALSE(submission.code.empty());
 }
 
+TEST_CASE("a valid C++ submission is accepted", "[submission]") {
+  auto json = valid_request();
+  json["language"] = "cpp";
+  json["code"] = "#include <iostream>\nint main() { std::cout << 3 << '\\n'; }";
+
+  const auto result = algorithm_trainer::validate_submission(json);
+
+  REQUIRE(std::holds_alternative<algorithm_trainer::SubmissionRequest>(result));
+  CHECK(std::get<algorithm_trainer::SubmissionRequest>(result).language == "cpp");
+}
+
 TEST_CASE("submission fields are required strings", "[submission]") {
   auto json = valid_request();
   json.removeMember("code");
@@ -43,13 +54,13 @@ TEST_CASE("submission fields are required strings", "[submission]") {
   CHECK(validation_error(json) == "language must be a string");
 }
 
-TEST_CASE("only the A + B problem and Python are supported", "[submission]") {
+TEST_CASE("only the A + B problem and configured languages are supported", "[submission]") {
   auto json = valid_request();
   json["problemId"] = "other-problem";
   CHECK(validation_error(json) == "Unsupported problemId");
 
   json = valid_request();
-  json["language"] = "cpp";
+  json["language"] = "rust";
   CHECK(validation_error(json) == "Unsupported language");
 }
 

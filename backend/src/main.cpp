@@ -170,6 +170,14 @@ void get_problem(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
   callback(drogon::HttpResponse::newHttpJsonResponse(algorithm_trainer::problem_to_json(*problem)));
 }
 
+void list_problems(const drogon::HttpRequestPtr &, ResponseCallback &&callback) {
+  Json::Value body{Json::arrayValue};
+  for (const auto &problem : algorithm_trainer::all_problems()) {
+    body.append(algorithm_trainer::problem_summary_to_json(problem));
+  }
+  callback(drogon::HttpResponse::newHttpJsonResponse(body));
+}
+
 void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
             algorithm_trainer::SubmissionService &submission_service,
             algorithm_trainer::AuthService &auth_service) {
@@ -398,6 +406,11 @@ int main() {
                        [&submission_service, &auth_service](const drogon::HttpRequestPtr &request,
                                                             ResponseCallback &&callback) {
                          profile(request, std::move(callback), submission_service, *auth_service);
+                       },
+                       {drogon::Get})
+      .registerHandler("/api/problems",
+                       [](const drogon::HttpRequestPtr &request, ResponseCallback &&callback) {
+                         list_problems(request, std::move(callback));
                        },
                        {drogon::Get})
       .registerHandler(

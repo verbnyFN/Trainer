@@ -72,6 +72,9 @@ RuntimeError classify_runtime_error(const ExecutionResult &execution) {
   constexpr int output_limit_exit_code{120};
   constexpr int child_launch_error_exit_code{127};
   constexpr int signal_exit_code_offset{128};
+  if (execution.error_type) {
+    return {*execution.error_type};
+  }
   if (execution.exit_code == output_limit_exit_code) {
     return {"Output Limit Exceeded"};
   }
@@ -79,7 +82,8 @@ RuntimeError classify_runtime_error(const ExecutionResult &execution) {
     return {"Sandbox Runtime Error"};
   }
   const auto exception = python_exception_name(execution.standard_error);
-  if (exception == "MemoryError") {
+  if (exception == "MemoryError" ||
+      execution.standard_error.find("std::bad_alloc") != std::string::npos) {
     return {"Memory Limit Exceeded"};
   }
   if (exception == "SyntaxError" || exception == "IndentationError" || exception == "TabError") {

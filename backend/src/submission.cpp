@@ -8,7 +8,6 @@ namespace algorithm_trainer {
 namespace {
 
 constexpr std::string_view problem_id{"a-plus-b"};
-constexpr std::string_view language{"python"};
 constexpr std::size_t maximum_code_size{64 * 1024};
 
 ValidationError error(std::string message) { return ValidationError{std::move(message)}; }
@@ -35,7 +34,7 @@ SubmissionValidation validate_submission(const Json::Value &json) {
   if (request.problem_id != problem_id) {
     return error("Unsupported problemId");
   }
-  if (request.language != language) {
+  if (request.language != "python" && request.language != "cpp") {
     return error("Unsupported language");
   }
   if (request.code.empty()) {
