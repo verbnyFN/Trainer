@@ -5,6 +5,7 @@
 
 #include <sqlite3.h>
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -30,6 +31,7 @@ constexpr int created_at_column{6};
 constexpr int completed_at_column{7};
 constexpr int user_id_column{8};
 constexpr int error_type_column{9};
+constexpr int retry_of_column{10};
 
 class Statement {
 public:
@@ -199,17 +201,22 @@ std::variant<SubmissionRecord, RepositoryError> read_record(sqlite3_stmt *statem
       .error_type = sqlite3_column_type(statement, error_type_column) == SQLITE_NULL
                         ? std::nullopt
                         : std::optional<std::string>{column_text(statement, error_type_column)},
+      .retry_of = sqlite3_column_type(statement, retry_of_column) == SQLITE_NULL
+                      ? std::nullopt
+                      : std::optional<SubmissionId>{SubmissionId{
+                            sqlite3_column_int64(statement, retry_of_column)}},
   };
 }
 
 constexpr std::string_view returned_columns{
     "id, problem_id, language, source_code, status, verdict, created_at, completed_at, user_id, "
-    "error_type"};
+    "error_type, retry_of"};
 
 } // namespace
 
 struct SQLiteSubmissionRepository::Implementation {
   sqlite3 *database{};
+  SubmissionQueueLimits limits;
 
   ~Implementation() { sqlite3_close(database); }
 };
@@ -221,7 +228,8 @@ SQLiteSubmissionRepository::SQLiteSubmissionRepository(
 SQLiteSubmissionRepository::~SQLiteSubmissionRepository() = default;
 
 SQLiteSubmissionRepository::OpenResult
-SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
+SQLiteSubmissionRepository::open(const std::filesystem::path &database_path,
+                                 SubmissionQueueLimits limits) {
   if (database_path != ":memory:" && database_path.has_parent_path()) {
     std::error_code error;
     std::filesystem::create_directories(database_path.parent_path(), error);
@@ -243,6 +251,7 @@ SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
 
   auto implementation = std::make_unique<Implementation>();
   implementation->database = database;
+  implementation->limits = limits;
   sqlite3_busy_timeout(database, busy_timeout_milliseconds);
   if (const auto error = execute(database, "PRAGMA foreign_keys = ON;")) {
     return *error;
@@ -262,14 +271,27 @@ SQLiteSubmissionRepository::open(const std::filesystem::path &database_path) {
   if (const auto error = apply_migration(database, 5, "005-add-submission-queue.sql")) {
     return *error;
   }
+  if (const auto error = apply_migration(database, 6, "006-add-admin-users.sql")) {
+    return *error;
+  }
+  if (const auto error = apply_migration(database, 7, "007-create-problems.sql")) {
+    return *error;
+  }
+  if (const auto error = apply_migration(database, 8, "008-add-admin-operations.sql")) {
+    return *error;
+  }
   return std::unique_ptr<SQLiteSubmissionRepository>{
       new SQLiteSubmissionRepository{std::move(implementation)}};
 }
 
 StoreSubmissionResult SQLiteSubmissionRepository::create(const SubmissionRequest &request) {
   const auto sql = "INSERT INTO submissions(problem_id, language, source_code, status, created_at, "
-                   "user_id) VALUES (?, ?, ?, 'queued', "
-                   "strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?) "
+                   "user_id) SELECT ?, ?, ?, 'queued', "
+                   "strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ? "
+                   "WHERE (SELECT COUNT(*) FROM submissions "
+                   "WHERE status IN ('queued', 'running')) < ? "
+                   "AND (SELECT COUNT(*) FROM submissions WHERE status IN ('queued', 'running') "
+                   "AND user_id IS ?) < ? "
                    "RETURNING " +
                    std::string{returned_columns} + ';';
   Statement statement{implementation_->database, sql};
@@ -281,10 +303,39 @@ StoreSubmissionResult SQLiteSubmissionRepository::create(const SubmissionRequest
   bind_text(statement.get(), 3, request.code);
   if (request.user_id) {
     sqlite3_bind_int64(statement.get(), 4, *request.user_id);
+    sqlite3_bind_int64(statement.get(), 6, *request.user_id);
   } else {
     sqlite3_bind_null(statement.get(), 4);
+    sqlite3_bind_null(statement.get(), 6);
   }
-  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+  sqlite3_bind_int64(
+      statement.get(), 5,
+      static_cast<sqlite3_int64>(implementation_->limits.maximum_active_submissions));
+  sqlite3_bind_int64(
+      statement.get(), 7,
+      static_cast<sqlite3_int64>(implementation_->limits.maximum_active_submissions_per_user));
+  const auto result = sqlite3_step(statement.get());
+  if (result == SQLITE_DONE) {
+    Statement user_count{implementation_->database,
+                         "SELECT COUNT(*) FROM submissions WHERE status IN ('queued', 'running') "
+                         "AND user_id IS ?;"};
+    if (!user_count.valid()) {
+      return RepositoryError{user_count.error()};
+    }
+    if (request.user_id) {
+      sqlite3_bind_int64(user_count.get(), 1, *request.user_id);
+    } else {
+      sqlite3_bind_null(user_count.get(), 1);
+    }
+    if (sqlite3_step(user_count.get()) == SQLITE_ROW &&
+        static_cast<std::size_t>(sqlite3_column_int64(user_count.get(), 0)) >=
+            implementation_->limits.maximum_active_submissions_per_user) {
+      return RepositoryError{"Too many active submissions for this user",
+                             RepositoryErrorCode::user_submission_limit};
+    }
+    return RepositoryError{"Submission queue is full", RepositoryErrorCode::queue_full};
+  }
+  if (result != SQLITE_ROW) {
     return database_error(implementation_->database, "Could not create submission");
   }
   return read_record(statement.get());
@@ -340,13 +391,19 @@ StoreSubmissionResult SQLiteSubmissionRepository::fail(SubmissionId submission_i
 
 ClaimSubmissionResult SQLiteSubmissionRepository::claim_next() {
   const auto sql = "UPDATE submissions SET status = 'running' WHERE id = ("
-                   "SELECT id FROM submissions WHERE status = 'queued' ORDER BY id LIMIT 1"
+                   "SELECT queued.id FROM submissions AS queued WHERE queued.status = 'queued' "
+                   "AND (SELECT COUNT(*) FROM submissions AS running "
+                   "WHERE running.status = 'running' AND running.user_id IS queued.user_id) < ? "
+                   "ORDER BY queued.id LIMIT 1"
                    ") AND status = 'queued' RETURNING " +
                    std::string{returned_columns} + ';';
   Statement statement{implementation_->database, sql};
   if (!statement.valid()) {
     return RepositoryError{statement.error()};
   }
+  sqlite3_bind_int64(
+      statement.get(), 1,
+      static_cast<sqlite3_int64>(implementation_->limits.maximum_running_submissions_per_user));
   const auto result = sqlite3_step(statement.get());
   if (result == SQLITE_DONE) {
     return std::optional<SubmissionRecord>{};
@@ -421,6 +478,162 @@ SubmissionHistoryResult SQLiteSubmissionRepository::history(std::int64_t user_id
     }
     records.push_back(std::get<SubmissionRecord>(std::move(record)));
   }
+}
+
+SubmissionHistoryResult SQLiteSubmissionRepository::list_all() {
+  const auto sql = "SELECT " + std::string{returned_columns} +
+                   " FROM submissions ORDER BY created_at DESC, id DESC;";
+  Statement statement{implementation_->database, sql};
+  if (!statement.valid())
+    return RepositoryError{statement.error()};
+  std::vector<SubmissionRecord> records;
+  while (true) {
+    const auto result = sqlite3_step(statement.get());
+    if (result == SQLITE_DONE)
+      return records;
+    if (result != SQLITE_ROW)
+      return database_error(implementation_->database, "Could not retrieve submissions");
+    auto record = read_record(statement.get());
+    if (const auto *error = std::get_if<RepositoryError>(&record))
+      return *error;
+    records.push_back(std::get<SubmissionRecord>(std::move(record)));
+  }
+}
+
+SubmissionHistoryResult
+SQLiteSubmissionRepository::list_filtered(const SubmissionAdminFilter &filter) {
+  std::string sql = "SELECT " + std::string{returned_columns} + " FROM submissions WHERE 1 = 1";
+  std::vector<std::variant<std::string, std::int64_t>> parameters;
+  const auto add_text = [&](std::string_view clause, const std::optional<std::string> &value) {
+    if (value) {
+      sql += clause;
+      parameters.emplace_back(*value);
+    }
+  };
+  if (filter.status) {
+    sql += " AND status = ?";
+    parameters.emplace_back(std::string{submission_status_name(*filter.status)});
+    std::get<std::string>(parameters.back())[0] =
+        static_cast<char>(std::tolower(std::get<std::string>(parameters.back())[0]));
+  }
+  add_text(" AND error_type = ?", filter.error_type);
+  add_text(" AND language = ?", filter.language);
+  add_text(" AND problem_id = ?", filter.problem_id);
+  if (filter.user_id) {
+    sql += " AND user_id = ?";
+    parameters.emplace_back(*filter.user_id);
+  }
+  add_text(" AND created_at >= ?", filter.created_from);
+  add_text(" AND created_at <= ?", filter.created_to);
+  sql += " ORDER BY created_at DESC, id DESC LIMIT 500;";
+  Statement statement{implementation_->database, sql};
+  if (!statement.valid())
+    return RepositoryError{statement.error()};
+  for (std::size_t index = 0; index < parameters.size(); ++index) {
+    if (const auto *text = std::get_if<std::string>(&parameters[index]))
+      bind_text(statement.get(), static_cast<int>(index + 1), *text);
+    else
+      sqlite3_bind_int64(statement.get(), static_cast<int>(index + 1),
+                         std::get<std::int64_t>(parameters[index]));
+  }
+  std::vector<SubmissionRecord> records;
+  while (true) {
+    const auto result = sqlite3_step(statement.get());
+    if (result == SQLITE_DONE)
+      return records;
+    if (result != SQLITE_ROW)
+      return database_error(implementation_->database, "Could not filter submissions");
+    auto record = read_record(statement.get());
+    if (const auto *error = std::get_if<RepositoryError>(&record))
+      return *error;
+    records.push_back(std::get<SubmissionRecord>(std::move(record)));
+  }
+}
+
+StoreSubmissionResult SQLiteSubmissionRepository::retry(SubmissionId submission_id,
+                                                        std::int64_t admin_user_id) {
+  if (const auto error = execute(implementation_->database, "BEGIN IMMEDIATE;"))
+    return *error;
+  const auto rollback = [this]() {
+    static_cast<void>(execute(implementation_->database, "ROLLBACK;"));
+  };
+  const auto sql = "INSERT INTO submissions(problem_id, language, source_code, status, created_at, "
+                   "user_id, retry_of) SELECT original.problem_id, original.language, "
+                   "original.source_code, 'queued', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), "
+                   "original.user_id, original.id FROM submissions AS original "
+                   "WHERE original.id = ? AND (original.status = 'failed' OR "
+                   "original.verdict = 'Runtime Error') AND NOT EXISTS "
+                   "(SELECT 1 FROM submissions WHERE retry_of = ?) AND "
+                   "(SELECT COUNT(*) FROM submissions WHERE status IN ('queued', 'running')) < ? "
+                   "AND (SELECT COUNT(*) FROM submissions WHERE status IN ('queued', 'running') "
+                   "AND user_id IS original.user_id) < ? RETURNING " +
+                   std::string{returned_columns} + ';';
+  Statement statement{implementation_->database, sql};
+  if (!statement.valid()) {
+    rollback();
+    return RepositoryError{statement.error()};
+  }
+  sqlite3_bind_int64(statement.get(), 1, submission_id.value);
+  sqlite3_bind_int64(statement.get(), 2, submission_id.value);
+  sqlite3_bind_int64(
+      statement.get(), 3,
+      static_cast<sqlite3_int64>(implementation_->limits.maximum_active_submissions));
+  sqlite3_bind_int64(
+      statement.get(), 4,
+      static_cast<sqlite3_int64>(implementation_->limits.maximum_active_submissions_per_user));
+  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+    rollback();
+    return RepositoryError{"Submission is not retryable or was already retried"};
+  }
+  auto retried = read_record(statement.get());
+  if (const auto *error = std::get_if<RepositoryError>(&retried)) {
+    rollback();
+    return *error;
+  }
+  sqlite3_reset(statement.get());
+  const auto &record = std::get<SubmissionRecord>(retried);
+  Statement audit_statement{
+      implementation_->database,
+      "INSERT INTO admin_audit_log(admin_user_id, action, entity_type, entity_id, details_json, "
+      "created_at) VALUES (?, 'submission.retry', 'submission', ?, ?, "
+      "strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));"};
+  if (!audit_statement.valid()) {
+    rollback();
+    return RepositoryError{audit_statement.error()};
+  }
+  sqlite3_bind_int64(audit_statement.get(), 1, admin_user_id);
+  bind_text(audit_statement.get(), 2, std::to_string(submission_id.value));
+  bind_text(audit_statement.get(), 3,
+            "{\"retrySubmissionId\":" + std::to_string(record.id.value) + "}");
+  if (sqlite3_step(audit_statement.get()) != SQLITE_DONE) {
+    rollback();
+    return database_error(implementation_->database, "Could not audit submission retry");
+  }
+  if (const auto error = execute(implementation_->database, "COMMIT;")) {
+    rollback();
+    return *error;
+  }
+  return retried;
+}
+
+std::variant<std::monostate, RepositoryError>
+SQLiteSubmissionRepository::audit(std::int64_t admin_user_id, const std::string &action,
+                                  const std::string &entity_type, const std::string &entity_id,
+                                  const std::string &details_json) {
+  Statement statement{
+      implementation_->database,
+      "INSERT INTO admin_audit_log(admin_user_id, action, entity_type, entity_id, details_json, "
+      "created_at) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));"};
+  if (!statement.valid())
+    return RepositoryError{statement.error()};
+  sqlite3_bind_int64(statement.get(), 1, admin_user_id);
+  bind_text(statement.get(), 2, action);
+  bind_text(statement.get(), 3, entity_type);
+  bind_text(statement.get(), 4, entity_id);
+  bind_text(statement.get(), 5, details_json);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE)
+    return database_error(implementation_->database, "Could not write admin audit record");
+  return std::monostate{};
 }
 
 UserProgressResult SQLiteSubmissionRepository::progress(std::int64_t user_id) {

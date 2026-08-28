@@ -9,6 +9,7 @@
 #include <sqlite3.h>
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -17,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -46,12 +48,19 @@ private:
 };
 
 std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>
-open_repository(const std::filesystem::path &path) {
-  auto result = algorithm_trainer::SQLiteSubmissionRepository::open(path);
+open_repository(const std::filesystem::path &path,
+                algorithm_trainer::SubmissionQueueLimits limits = {}) {
+  auto result = algorithm_trainer::SQLiteSubmissionRepository::open(path, limits);
   REQUIRE(std::holds_alternative<std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>>(
       result));
   return std::get<std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>>(
       std::move(result));
+}
+
+algorithm_trainer::RepositoryError
+repository_error(algorithm_trainer::StoreSubmissionResult result) {
+  REQUIRE(std::holds_alternative<algorithm_trainer::RepositoryError>(result));
+  return std::get<algorithm_trainer::RepositoryError>(std::move(result));
 }
 
 algorithm_trainer::SubmissionRequest submission(std::string code = "print(3)") {
@@ -113,6 +122,128 @@ TEST_CASE("SQLite creates and completes a submission", "[sqlite]") {
   CHECK(completed.status == algorithm_trainer::SubmissionStatus::completed);
   CHECK(completed.verdict == algorithm_trainer::Verdict::accepted);
   CHECK(completed.completed_at.has_value());
+}
+
+TEST_CASE("SQLite rejects submissions when the global queue is full", "[sqlite][queue-limit]") {
+  TemporaryDirectory directory;
+  auto repository =
+      open_repository(directory.database(), {
+                                                .maximum_active_submissions = 2,
+                                                .maximum_active_submissions_per_user = 5,
+                                                .maximum_running_submissions_per_user = 1,
+                                            });
+  static_cast<void>(stored_record(repository->create(submission("first"))));
+  static_cast<void>(stored_record(repository->create(submission("second"))));
+
+  const auto error = repository_error(repository->create(submission("rejected")));
+
+  CHECK(error.code == algorithm_trainer::RepositoryErrorCode::queue_full);
+  CHECK(error.message == "Submission queue is full");
+}
+
+TEST_CASE("Concurrent queue admission cannot exceed the global limit", "[sqlite][queue-limit]") {
+  TemporaryDirectory directory;
+  auto repository =
+      open_repository(directory.database(), {
+                                                .maximum_active_submissions = 8,
+                                                .maximum_active_submissions_per_user = 100,
+                                                .maximum_running_submissions_per_user = 1,
+                                            });
+  std::atomic<int> accepted{};
+  std::atomic<int> full{};
+  std::atomic<int> unexpected{};
+  std::vector<std::thread> requests;
+  for (int index = 0; index < 32; ++index) {
+    requests.emplace_back([&, index] {
+      auto result = repository->create(submission("concurrent-" + std::to_string(index)));
+      if (std::holds_alternative<algorithm_trainer::SubmissionRecord>(result)) {
+        ++accepted;
+      } else if (std::get<algorithm_trainer::RepositoryError>(result).code ==
+                 algorithm_trainer::RepositoryErrorCode::queue_full) {
+        ++full;
+      } else {
+        ++unexpected;
+      }
+    });
+  }
+  for (auto &request : requests) {
+    request.join();
+  }
+
+  CHECK(accepted == 8);
+  CHECK(full == 24);
+  CHECK(unexpected == 0);
+}
+
+TEST_CASE("SQLite limits active submissions per user without blocking other users",
+          "[sqlite][queue-limit]") {
+  TemporaryDirectory directory;
+  auto auth_result = algorithm_trainer::AuthService::open(directory.database());
+  REQUIRE(std::holds_alternative<std::unique_ptr<algorithm_trainer::AuthService>>(auth_result));
+  auto auth = std::get<std::unique_ptr<algorithm_trainer::AuthService>>(std::move(auth_result));
+  const auto first_registration = auth->register_user("limited-user", "password-one");
+  const auto second_registration = auth->register_user("other-limited-user", "password-two");
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(first_registration));
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(second_registration));
+  const auto first_user = std::get<algorithm_trainer::AuthSession>(first_registration).user.id;
+  const auto second_user = std::get<algorithm_trainer::AuthSession>(second_registration).user.id;
+  auto repository =
+      open_repository(directory.database(), {
+                                                .maximum_active_submissions = 10,
+                                                .maximum_active_submissions_per_user = 1,
+                                                .maximum_running_submissions_per_user = 1,
+                                            });
+  auto first = submission("first user");
+  first.user_id = first_user;
+  auto repeated = submission("first user again");
+  repeated.user_id = first_user;
+  auto other = submission("other user");
+  other.user_id = second_user;
+  static_cast<void>(stored_record(repository->create(first)));
+
+  const auto limited = repository_error(repository->create(repeated));
+  const auto accepted = repository->create(other);
+
+  CHECK(limited.code == algorithm_trainer::RepositoryErrorCode::user_submission_limit);
+  CHECK(limited.message == "Too many active submissions for this user");
+  CHECK(std::holds_alternative<algorithm_trainer::SubmissionRecord>(accepted));
+}
+
+TEST_CASE("SQLite claims work fairly across users", "[sqlite][queue-fairness]") {
+  TemporaryDirectory directory;
+  auto auth_result = algorithm_trainer::AuthService::open(directory.database());
+  REQUIRE(std::holds_alternative<std::unique_ptr<algorithm_trainer::AuthService>>(auth_result));
+  auto auth = std::get<std::unique_ptr<algorithm_trainer::AuthService>>(std::move(auth_result));
+  const auto first_registration = auth->register_user("fair-user", "password-one");
+  const auto second_registration = auth->register_user("fair-other", "password-two");
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(first_registration));
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthSession>(second_registration));
+  const auto first_user = std::get<algorithm_trainer::AuthSession>(first_registration).user.id;
+  const auto second_user = std::get<algorithm_trainer::AuthSession>(second_registration).user.id;
+  auto repository = open_repository(directory.database());
+  auto first = submission("first");
+  first.user_id = first_user;
+  auto second = submission("second");
+  second.user_id = first_user;
+  auto other = submission("other");
+  other.user_id = second_user;
+  const auto first_record = stored_record(repository->create(first));
+  const auto second_record = stored_record(repository->create(second));
+  const auto other_record = stored_record(repository->create(other));
+
+  const auto first_claim = claim_record(*repository);
+  const auto second_claim = claim_record(*repository);
+  const auto blocked_claim = repository->claim_next();
+
+  CHECK(first_claim.id == first_record.id);
+  CHECK(second_claim.id == other_record.id);
+  REQUIRE(
+      std::holds_alternative<std::optional<algorithm_trainer::SubmissionRecord>>(blocked_claim));
+  CHECK_FALSE(
+      std::get<std::optional<algorithm_trainer::SubmissionRecord>>(blocked_claim).has_value());
+  static_cast<void>(
+      stored_record(repository->complete(first_claim.id, algorithm_trainer::Verdict::accepted)));
+  CHECK(claim_record(*repository).id == second_record.id);
 }
 
 TEST_CASE("SQLite persists submissions across repository instances", "[sqlite]") {
@@ -313,4 +444,49 @@ TEST_CASE("SQLite derives user progress from accepted submissions", "[sqlite]") 
   const auto stale_result = repository->progress(user_id);
   REQUIRE(std::holds_alternative<algorithm_trainer::UserProgress>(stale_result));
   CHECK(std::get<algorithm_trainer::UserProgress>(stale_result).current_streak_days == 0);
+}
+
+TEST_CASE("admin retry is atomic, unique, and audited", "[sqlite][admin][retry]") {
+  TemporaryDirectory directory;
+  auto auth_result = algorithm_trainer::AuthService::open(directory.database());
+  REQUIRE(std::holds_alternative<std::unique_ptr<algorithm_trainer::AuthService>>(auth_result));
+  auto auth = std::get<std::unique_ptr<algorithm_trainer::AuthService>>(std::move(auth_result));
+  auto admin_result = auth->ensure_admin("retry-admin", "password-one");
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthUser>(admin_result));
+  const auto admin_id = std::get<algorithm_trainer::AuthUser>(admin_result).id;
+
+  auto first_repository = open_repository(directory.database());
+  const auto original = stored_record(first_repository->create(submission("raise RuntimeError")));
+  CHECK(claim_record(*first_repository).id == original.id);
+  static_cast<void>(stored_record(first_repository->fail(original.id, "runtime-error")));
+  auto second_repository = open_repository(directory.database());
+
+  std::atomic<int> successful_retries{};
+  const auto retry = [&](algorithm_trainer::SQLiteSubmissionRepository &repository) {
+    auto result = repository.retry(original.id, admin_id);
+    if (std::holds_alternative<algorithm_trainer::SubmissionRecord>(result))
+      ++successful_retries;
+  };
+  std::thread first{retry, std::ref(*first_repository)};
+  std::thread second{retry, std::ref(*second_repository)};
+  first.join();
+  second.join();
+  CHECK(successful_retries == 1);
+
+  sqlite3 *database{};
+  REQUIRE(sqlite3_open(directory.database().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement{};
+  REQUIRE(sqlite3_prepare_v2(database,
+                             "SELECT (SELECT COUNT(*) FROM submissions WHERE retry_of = ?), "
+                             "(SELECT COUNT(*) FROM admin_audit_log WHERE action = "
+                             "'submission.retry' AND entity_id = ?);",
+                             -1, &statement, nullptr) == SQLITE_OK);
+  sqlite3_bind_int64(statement, 1, original.id.value);
+  const auto id = std::to_string(original.id.value);
+  sqlite3_bind_text(statement, 2, id.c_str(), -1, SQLITE_TRANSIENT);
+  REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+  CHECK(sqlite3_column_int(statement, 0) == 1);
+  CHECK(sqlite3_column_int(statement, 1) == 1);
+  sqlite3_finalize(statement);
+  sqlite3_close(database);
 }

@@ -3,6 +3,7 @@ import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
 import "monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution";
 import { FormEvent, useEffect, useState } from "react";
+import { AdminPanel } from "./AdminPanel";
 
 loader.config({ monaco });
 
@@ -121,10 +122,11 @@ type AuthUser = {
   id: number;
   username: string;
   createdAt: string;
+  isAdmin: boolean;
 };
 
 type AuthMode = "login" | "register";
-type View = "problem" | "problems" | "profile";
+type View = "problem" | "problems" | "profile" | "admin";
 
 type ProfileData = {
   user: AuthUser;
@@ -560,6 +562,7 @@ export function App() {
         <div className="account-summary">
           <span>
             Signed in as <strong>{user.username}</strong>
+            {user.isAdmin && <span className="admin-badge">Admin</span>}
           </span>
           <nav className="account-navigation" aria-label="Main navigation">
             <button type="button" className="text-button" onClick={() => setView("profile")} disabled={view === "profile"}>
@@ -568,6 +571,9 @@ export function App() {
             <button type="button" className="text-button" onClick={() => setView("problems")} disabled={view === "problems"}>
               Problems
             </button>
+            {user.isAdmin && <button type="button" className="text-button" onClick={() => setView("admin")} disabled={view === "admin"}>
+              Admin
+            </button>}
           </nav>
           <button type="button" className="secondary-button" onClick={logout} disabled={authSubmitting}>
             {authSubmitting ? "Signing out…" : "Logout"}
@@ -576,7 +582,7 @@ export function App() {
         {authError !== undefined && <p className="auth-error" role="alert">{authError}</p>}
       </header>
 
-      {view === "profile" ? (
+      {view === "admin" && user.isAdmin ? <AdminPanel /> : view === "profile" ? (
         <main className="profile-page">
           {profileLoading && profile === undefined ? (
             <p role="status">Loading profile…</p>

@@ -14,6 +14,8 @@ add_library(
   src/nsjail-python-executor.cpp
   src/problem.cpp
   src/problem-judge.cpp
+  src/problem-service.cpp
+  src/sqlite-problem-repository.cpp
   src/sqlite-submission-repository.cpp
   src/submission.cpp
   src/submission-record.cpp
@@ -59,6 +61,7 @@ if(BUILD_TESTING)
     tests/auth-service-test.cpp
     tests/judge-test.cpp
     tests/problem-test.cpp
+    tests/sqlite-problem-repository-test.cpp
     tests/smoke-test.cpp
     tests/sqlite-submission-repository-test.cpp
     tests/submission-service-test.cpp

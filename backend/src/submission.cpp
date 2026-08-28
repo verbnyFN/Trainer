@@ -1,8 +1,5 @@
 #include "algorithm-trainer/submission.h"
 
-#include "algorithm-trainer/problem.h"
-
-#include <algorithm>
 #include <cstddef>
 #include <utility>
 
@@ -32,11 +29,10 @@ SubmissionValidation validate_submission(const Json::Value &json) {
       .code = json["code"].asString(),
   };
 
-  const auto *problem = find_problem(request.problem_id);
-  if (problem == nullptr) {
+  if (request.problem_id.empty() || request.problem_id.size() > 128) {
     return error("Unsupported problemId");
   }
-  if (std::ranges::find(problem->languages, request.language) == problem->languages.end()) {
+  if (request.language != "python" && request.language != "cpp") {
     return error("Unsupported language");
   }
   if (request.code.empty()) {

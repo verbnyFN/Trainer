@@ -19,7 +19,6 @@
 namespace algorithm_trainer {
 namespace {
 
-constexpr int migration_version{2};
 constexpr int busy_timeout_milliseconds{5000};
 constexpr int session_lifetime_seconds{60 * 60 * 24 * 30};
 
@@ -70,7 +69,8 @@ std::optional<AuthError> execute(sqlite3 *database, std::string_view sql) {
   return internal_error("SQLite operation failed: " + detail);
 }
 
-std::optional<AuthError> apply_migration(sqlite3 *database) {
+std::optional<AuthError> apply_migration(sqlite3 *database, int version,
+                                         std::string_view file_name) {
   if (const auto error =
           execute(database,
                   "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);")) {
@@ -80,12 +80,12 @@ std::optional<AuthError> apply_migration(sqlite3 *database) {
   if (!check.valid()) {
     return internal_error(check.error());
   }
-  sqlite3_bind_int(check.get(), 1, migration_version);
+  sqlite3_bind_int(check.get(), 1, version);
   if (sqlite3_step(check.get()) == SQLITE_ROW) {
     return std::nullopt;
   }
 
-  const auto path = std::filesystem::path{ALGORITHM_TRAINER_MIGRATIONS_DIR} / "002-create-auth.sql";
+  const auto path = std::filesystem::path{ALGORITHM_TRAINER_MIGRATIONS_DIR} / file_name;
   std::ifstream input{path};
   if (!input) {
     return internal_error("Authentication migration file is unavailable");
@@ -100,7 +100,7 @@ std::optional<AuthError> apply_migration(sqlite3 *database) {
     return error;
   }
   Statement record{database, "INSERT INTO schema_migrations(version) VALUES (?);"};
-  sqlite3_bind_int(record.get(), 1, migration_version);
+  sqlite3_bind_int(record.get(), 1, version);
   if (!record.valid() || sqlite3_step(record.get()) != SQLITE_DONE) {
     auto error = internal_error("Could not record authentication migration");
     static_cast<void>(execute(database, "ROLLBACK;"));
@@ -153,7 +153,8 @@ std::string new_token() {
 AuthUser read_user(sqlite3_stmt *statement) {
   return {.id = sqlite3_column_int64(statement, 0),
           .username = column_text(statement, 1),
-          .created_at = column_text(statement, 2)};
+          .created_at = column_text(statement, 2),
+          .is_admin = sqlite3_column_int(statement, 3) != 0};
 }
 
 std::variant<AuthSession, AuthError> create_session(sqlite3 *database, AuthUser user) {
@@ -221,7 +222,10 @@ AuthService::OpenResult AuthService::open(const std::filesystem::path &database_
   if (const auto error = execute(database, "PRAGMA foreign_keys = ON;")) {
     return *error;
   }
-  if (const auto error = apply_migration(database)) {
+  if (const auto error = apply_migration(database, 2, "002-create-auth.sql")) {
+    return *error;
+  }
+  if (const auto error = apply_migration(database, 6, "006-add-admin-users.sql")) {
     return *error;
   }
   return std::unique_ptr<AuthService>{new AuthService{std::move(implementation)}};
@@ -237,10 +241,10 @@ AuthService::SessionResult AuthService::register_user(std::string username, std:
                         crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0) {
     return internal_error("Password hashing failed");
   }
-  Statement statement{
-      implementation_->database,
-      "INSERT INTO users(username, password_hash, created_at) "
-      "VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) RETURNING id, username, created_at;"};
+  Statement statement{implementation_->database,
+                      "INSERT INTO users(username, password_hash, created_at) "
+                      "VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) "
+                      "RETURNING id, username, created_at, is_admin;"};
   if (!statement.valid()) {
     return internal_error(statement.error());
   }
@@ -261,7 +265,7 @@ AuthService::SessionResult AuthService::login(std::string username, std::string 
     return AuthError{AuthErrorCode::invalid_credentials, "Invalid username or password"};
   }
   Statement statement{implementation_->database,
-                      "SELECT id, username, created_at, password_hash FROM users "
+                      "SELECT id, username, created_at, is_admin, password_hash FROM users "
                       "WHERE username = ? COLLATE NOCASE;"};
   if (!statement.valid()) {
     return internal_error(statement.error());
@@ -269,7 +273,7 @@ AuthService::SessionResult AuthService::login(std::string username, std::string 
   bind_text(statement.get(), 1, username);
   const bool user_exists = sqlite3_step(statement.get()) == SQLITE_ROW;
   const auto password_hash =
-      user_exists ? column_text(statement.get(), 3) : implementation_->dummy_password_hash;
+      user_exists ? column_text(statement.get(), 4) : implementation_->dummy_password_hash;
   const bool password_matches =
       crypto_pwhash_str_verify(password_hash.c_str(), password.data(), password.size()) == 0;
   if (!user_exists || !password_matches) {
@@ -278,15 +282,54 @@ AuthService::SessionResult AuthService::login(std::string username, std::string 
   return create_session(implementation_->database, read_user(statement.get()));
 }
 
+AuthService::UserResult AuthService::ensure_admin(std::string username, std::string password) {
+  if (const auto error = validate_credentials(username, password)) {
+    return *error;
+  }
+  std::array<char, crypto_pwhash_STRBYTES> password_hash{};
+  if (crypto_pwhash_str(password_hash.data(), password.data(), password.size(),
+                        crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                        crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0) {
+    return internal_error("Admin password hashing failed");
+  }
+  Statement upsert{
+      implementation_->database,
+      "INSERT INTO users(username, password_hash, created_at, is_admin) "
+      "VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 1) "
+      "ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash, is_admin = 1 "
+      "WHERE users.is_admin = 0 RETURNING id, username, created_at, is_admin;"};
+  if (!upsert.valid()) {
+    return internal_error(upsert.error());
+  }
+  bind_text(upsert.get(), 1, username);
+  bind_text(upsert.get(), 2, std::string{password_hash.data()});
+  if (sqlite3_step(upsert.get()) == SQLITE_ROW) {
+    return read_user(upsert.get());
+  }
+
+  Statement existing{implementation_->database,
+                     "SELECT id, username, created_at, is_admin FROM users "
+                     "WHERE username = ? COLLATE NOCASE AND is_admin = 1;"};
+  if (!existing.valid()) {
+    return internal_error(existing.error());
+  }
+  bind_text(existing.get(), 1, username);
+  if (sqlite3_step(existing.get()) != SQLITE_ROW) {
+    return internal_error("Could not initialize admin account");
+  }
+  return read_user(existing.get());
+}
+
 AuthService::UserResult AuthService::current_user(const std::string &token) {
   if (token.empty()) {
     return AuthError{AuthErrorCode::unauthenticated, "Authentication required"};
   }
-  Statement statement{implementation_->database,
-                      "SELECT users.id, users.username, users.created_at FROM sessions "
-                      "JOIN users ON users.id = sessions.user_id "
-                      "WHERE sessions.token_hash = ? AND sessions.expires_at > "
-                      "strftime('%Y-%m-%dT%H:%M:%fZ', 'now');"};
+  Statement statement{
+      implementation_->database,
+      "SELECT users.id, users.username, users.created_at, users.is_admin FROM sessions "
+      "JOIN users ON users.id = sessions.user_id "
+      "WHERE sessions.token_hash = ? AND sessions.expires_at > "
+      "strftime('%Y-%m-%dT%H:%M:%fZ', 'now');"};
   if (!statement.valid()) {
     return internal_error(statement.error());
   }

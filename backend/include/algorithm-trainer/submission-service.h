@@ -12,8 +12,11 @@
 
 namespace algorithm_trainer {
 
+enum class SubmissionServiceErrorCode { internal, rate_limited, queue_full };
+
 struct SubmissionServiceError {
   std::string message;
+  SubmissionServiceErrorCode code{SubmissionServiceErrorCode::internal};
 };
 
 using SubmitResult = std::variant<SubmissionRecord, SubmissionServiceError>;

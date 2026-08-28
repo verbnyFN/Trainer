@@ -111,12 +111,20 @@ std::string normalize_output(std::string_view output) {
 
 } // namespace
 
-ProblemJudge::ProblemJudge(Executor &executor) : executor_{executor} {}
+ProblemJudge::ProblemJudge(Executor &executor, ProblemService &problems)
+    : executor_{executor}, problems_{problems} {}
 
 JudgeResult ProblemJudge::run(const JudgeRequest &request) {
-  const auto *problem = find_problem(request.problem_id);
-  if (problem == nullptr) {
+  auto found = problems_.find_for_judging(request.problem_id);
+  if (const auto *error = std::get_if<ProblemRepositoryError>(&found)) {
+    return JudgeError{error->message};
+  }
+  auto problem = std::get<std::optional<Problem>>(std::move(found));
+  if (!problem) {
     return JudgeError{"Unknown problem"};
+  }
+  if (problem->hidden_tests.empty()) {
+    return JudgeError{"Problem has no enabled hidden tests"};
   }
 
   for (const auto &test_case : problem->hidden_tests) {

@@ -12,7 +12,10 @@ struct AuthUser {
   std::int64_t id{};
   std::string username;
   std::string created_at;
+  bool is_admin{};
 };
+
+[[nodiscard]] inline bool has_admin_access(const AuthUser &user) { return user.is_admin; }
 
 enum class AuthErrorCode {
   invalid_input,
@@ -45,6 +48,7 @@ public:
   [[nodiscard]] static OpenResult open(const std::filesystem::path &database_path);
   [[nodiscard]] SessionResult register_user(std::string username, std::string password);
   [[nodiscard]] SessionResult login(std::string username, std::string password);
+  [[nodiscard]] UserResult ensure_admin(std::string username, std::string password);
   [[nodiscard]] UserResult current_user(const std::string &token);
   [[nodiscard]] std::variant<std::monostate, AuthError> logout(const std::string &token);
 

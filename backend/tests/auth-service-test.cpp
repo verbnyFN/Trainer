@@ -62,8 +62,49 @@ TEST_CASE("Registration creates a user and authenticated session", "[auth]") {
 
   CHECK(registered.user.id > 0);
   CHECK(registered.user.username == "alice");
+  CHECK_FALSE(registered.user.is_admin);
   REQUIRE(std::holds_alternative<algorithm_trainer::AuthUser>(current));
   CHECK(std::get<algorithm_trainer::AuthUser>(current).username == "alice");
+  CHECK_FALSE(std::get<algorithm_trainer::AuthUser>(current).is_admin);
+}
+
+TEST_CASE("Bootstrap admin can log in and restores its authorization claim", "[auth][admin]") {
+  TemporaryDatabase database;
+  auto service = open_service(database.path());
+
+  const auto initialized = service->ensure_admin("admin", "adminpassword");
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthUser>(initialized));
+  CHECK(std::get<algorithm_trainer::AuthUser>(initialized).is_admin);
+  const auto logged_in = session(service->login("admin", "adminpassword"));
+  CHECK(logged_in.user.is_admin);
+  const auto current = service->current_user(logged_in.token);
+  REQUIRE(std::holds_alternative<algorithm_trainer::AuthUser>(current));
+  CHECK(std::get<algorithm_trainer::AuthUser>(current).is_admin);
+}
+
+TEST_CASE("Bootstrap admin password is hashed in SQLite", "[auth][admin]") {
+  TemporaryDatabase database;
+  {
+    auto service = open_service(database.path());
+    REQUIRE(std::holds_alternative<algorithm_trainer::AuthUser>(
+        service->ensure_admin("admin", "adminpassword")));
+  }
+
+  sqlite3 *connection{};
+  REQUIRE(sqlite3_open_v2(database.path().c_str(), &connection, SQLITE_OPEN_READONLY, nullptr) ==
+          SQLITE_OK);
+  sqlite3_stmt *statement{};
+  REQUIRE(sqlite3_prepare_v2(connection,
+                             "SELECT password_hash, is_admin FROM users WHERE username = 'admin';",
+                             -1, &statement, nullptr) == SQLITE_OK);
+  REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+  const std::string password_hash{
+      reinterpret_cast<const char *>(sqlite3_column_text(statement, 0))};
+  CHECK(password_hash != "adminpassword");
+  CHECK(password_hash.starts_with("$argon2id$"));
+  CHECK(sqlite3_column_int(statement, 1) == 1);
+  sqlite3_finalize(statement);
+  sqlite3_close(connection);
 }
 
 TEST_CASE("Duplicate registration is rejected case-insensitively", "[auth]") {
@@ -158,4 +199,11 @@ TEST_CASE("Registration validates username and password", "[auth]") {
         algorithm_trainer::AuthErrorCode::invalid_input);
   CHECK(error(service->register_user("alice", std::string(129, 'p'))).code ==
         algorithm_trainer::AuthErrorCode::invalid_input);
+}
+
+TEST_CASE("admin authorization rejects ordinary authenticated users", "[auth][admin]") {
+  CHECK_FALSE(algorithm_trainer::has_admin_access(
+      algorithm_trainer::AuthUser{.id = 1, .username = "ordinary", .is_admin = false}));
+  CHECK(algorithm_trainer::has_admin_access(
+      algorithm_trainer::AuthUser{.id = 2, .username = "administrator", .is_admin = true}));
 }

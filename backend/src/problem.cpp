@@ -1,4 +1,5 @@
 #include "algorithm-trainer/problem.h"
+#include "algorithm-trainer/problem-seed.h"
 
 #include <algorithm>
 #include <limits>
@@ -399,19 +400,13 @@ std::string_view difficulty_name(ProblemDifficulty difficulty) {
   throw std::logic_error{"Unknown problem difficulty"};
 }
 
-const std::vector<Problem> &all_problems() {
+const std::vector<Problem> &default_problems() {
   static const std::vector problems{
       make_a_plus_b(),       make_merge_sort(),     make_activity_selection(),
       make_assign_cookies(), make_minimum_arrows(), make_distinct_values(),
       make_first_unique(),   make_pair_sum_count(),
   };
   return problems;
-}
-
-const Problem *find_problem(std::string_view slug) {
-  const auto &problems = all_problems();
-  const auto found = std::ranges::find(problems, slug, &Problem::id);
-  return found == problems.end() ? nullptr : &*found;
 }
 
 Json::Value problem_summary_to_json(const Problem &problem) {
@@ -450,6 +445,27 @@ Json::Value problem_to_json(const Problem &problem) {
     examples.append(std::move(serialized_example));
   }
   json["examples"] = std::move(examples);
+  return json;
+}
+
+Json::Value admin_problem_test_to_json(const ProblemTestCase &test) {
+  Json::Value json;
+  json["id"] = Json::Int64{test.id};
+  json["input"] = test.input;
+  json["expectedOutput"] = test.expected_output;
+  json["position"] = Json::Int64{test.position};
+  json["enabled"] = test.enabled;
+  json["revision"] = Json::Int64{test.revision};
+  return json;
+}
+
+Json::Value admin_problem_to_json(const Problem &problem) {
+  auto json = problem_to_json(problem);
+  json["enabled"] = problem.enabled;
+  json["revision"] = Json::Int64{problem.revision};
+  json["tests"] = Json::Value{Json::arrayValue};
+  for (const auto &test : problem.hidden_tests)
+    json["tests"].append(admin_problem_test_to_json(test));
   return json;
 }
 

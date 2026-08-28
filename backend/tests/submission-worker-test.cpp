@@ -45,8 +45,9 @@ private:
 };
 
 std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>
-open_repository(const std::filesystem::path &path) {
-  auto result = algorithm_trainer::SQLiteSubmissionRepository::open(path);
+open_repository(const std::filesystem::path &path,
+                algorithm_trainer::SubmissionQueueLimits limits = {}) {
+  auto result = algorithm_trainer::SQLiteSubmissionRepository::open(path, limits);
   REQUIRE(std::holds_alternative<std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>>(
       result));
   return std::get<std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>>(
@@ -115,7 +116,12 @@ public:
 
 TEST_CASE("Concurrent workers process each queued submission exactly once", "[worker][sqlite]") {
   TemporaryDirectory directory;
-  auto repository = open_repository(directory.database());
+  auto repository =
+      open_repository(directory.database(), {
+                                                .maximum_active_submissions = 50,
+                                                .maximum_active_submissions_per_user = 50,
+                                                .maximum_running_submissions_per_user = 4,
+                                            });
   std::vector<algorithm_trainer::SubmissionRecord> queued;
   for (int index = 0; index < 24; ++index) {
     queued.push_back(create(*repository, "submission-" + std::to_string(index)));

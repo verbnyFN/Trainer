@@ -5,6 +5,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "seed-problem-repository.h"
+
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -42,7 +44,7 @@ algorithm_trainer::ExecutionResult run_cpp(std::string source, std::string input
 algorithm_trainer::JudgeResult judge(std::string source, std::string language = "python",
                                      std::string problem_id = "a-plus-b") {
   algorithm_trainer::NsJailPythonExecutor executor;
-  algorithm_trainer::ProblemJudge judge{executor};
+  algorithm_trainer::ProblemJudge judge{executor, test_problem_service()};
   return judge.run({
       .problem_id = std::move(problem_id),
       .language = std::move(language),

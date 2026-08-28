@@ -31,6 +31,7 @@ struct SubmissionRecord {
   std::optional<std::string> completed_at;
   std::optional<std::int64_t> user_id;
   std::optional<std::string> error_type;
+  std::optional<SubmissionId> retry_of;
 };
 
 struct CompletedProblem {

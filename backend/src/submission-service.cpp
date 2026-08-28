@@ -13,7 +13,12 @@ SubmissionService::SubmissionService(SubmissionRepository &repository,
 SubmitResult SubmissionService::submit(const SubmissionRequest &submission) {
   auto created = repository_.create(submission);
   if (const auto *error = std::get_if<RepositoryError>(&created)) {
-    return SubmissionServiceError{error->message};
+    const auto code = error->code == RepositoryErrorCode::user_submission_limit
+                          ? SubmissionServiceErrorCode::rate_limited
+                      : error->code == RepositoryErrorCode::queue_full
+                          ? SubmissionServiceErrorCode::queue_full
+                          : SubmissionServiceErrorCode::internal;
+    return SubmissionServiceError{error->message, code};
   }
   auto queued = std::get<SubmissionRecord>(std::move(created));
   if (queue_notifier_) {

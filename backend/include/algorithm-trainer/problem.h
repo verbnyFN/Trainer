@@ -2,6 +2,7 @@
 
 #include <json/value.h>
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +21,10 @@ struct ProblemExample {
 struct ProblemTestCase {
   std::string input;
   std::string expected_output;
+  std::int64_t id{};
+  std::int64_t position{};
+  bool enabled{true};
+  std::int64_t revision{1};
 };
 
 struct Problem {
@@ -32,12 +37,14 @@ struct Problem {
   std::vector<std::string> tags;
   std::vector<std::string> languages;
   std::vector<ProblemExample> examples;
+  bool enabled{true};
+  std::int64_t revision{1};
   std::vector<ProblemTestCase> hidden_tests;
 };
 
-[[nodiscard]] const Problem *find_problem(std::string_view slug);
-[[nodiscard]] const std::vector<Problem> &all_problems();
 [[nodiscard]] Json::Value problem_to_json(const Problem &problem);
 [[nodiscard]] Json::Value problem_summary_to_json(const Problem &problem);
+[[nodiscard]] Json::Value admin_problem_to_json(const Problem &problem);
+[[nodiscard]] Json::Value admin_problem_test_to_json(const ProblemTestCase &test);
 
 } // namespace algorithm_trainer

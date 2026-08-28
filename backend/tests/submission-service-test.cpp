@@ -116,6 +116,26 @@ TEST_CASE("SubmissionService reports queue persistence errors", "[submission-ser
   CHECK(repository.create_count == 1);
 }
 
+TEST_CASE("SubmissionService preserves rate-limit and queue-full errors", "[submission-service]") {
+  RecordingRepository repository;
+  algorithm_trainer::SubmissionService service{repository};
+
+  repository.create_error = algorithm_trainer::RepositoryError{
+      "Too many active submissions for this user",
+      algorithm_trainer::RepositoryErrorCode::user_submission_limit};
+  const auto limited = service.submit(valid_submission());
+  REQUIRE(std::holds_alternative<algorithm_trainer::SubmissionServiceError>(limited));
+  CHECK(std::get<algorithm_trainer::SubmissionServiceError>(limited).code ==
+        algorithm_trainer::SubmissionServiceErrorCode::rate_limited);
+
+  repository.create_error = algorithm_trainer::RepositoryError{
+      "Submission queue is full", algorithm_trainer::RepositoryErrorCode::queue_full};
+  const auto full = service.submit(valid_submission());
+  REQUIRE(std::holds_alternative<algorithm_trainer::SubmissionServiceError>(full));
+  CHECK(std::get<algorithm_trainer::SubmissionServiceError>(full).code ==
+        algorithm_trainer::SubmissionServiceErrorCode::queue_full);
+}
+
 TEST_CASE("SubmissionService retrieves queued records and history", "[submission-service]") {
   RecordingRepository repository;
   repository.record.user_id = 7;
