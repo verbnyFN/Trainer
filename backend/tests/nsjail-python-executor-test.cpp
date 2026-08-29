@@ -1,4 +1,5 @@
 #include "algorithm-trainer/executor.h"
+#include "algorithm-trainer/isolated-process-executor.h"
 #include "algorithm-trainer/judge.h"
 #include "algorithm-trainer/nsjail-python-executor.h"
 #include "algorithm-trainer/problem-judge.h"
@@ -18,13 +19,13 @@ namespace {
 
 algorithm_trainer::ExecutionResult require_execution(algorithm_trainer::ExecutorResult result) {
   if (const auto *error = std::get_if<algorithm_trainer::ExecutorError>(&result)) {
-    SKIP("NsJail is unavailable in this kernel/environment: " << error->message);
+    FAIL("NsJail became unavailable after the test probe: " << error->message);
   }
   return std::get<algorithm_trainer::ExecutionResult>(std::move(result));
 }
 
 algorithm_trainer::ExecutionResult run_python(std::string source, std::string input = {}) {
-  algorithm_trainer::NsJailPythonExecutor executor;
+  algorithm_trainer::IsolatedProcessExecutor executor{ALGORITHM_TRAINER_JUDGE_WORKER_PATH};
   return require_execution(executor.run({
       .language = "python",
       .source_code = std::move(source),
@@ -33,7 +34,7 @@ algorithm_trainer::ExecutionResult run_python(std::string source, std::string in
 }
 
 algorithm_trainer::ExecutionResult run_cpp(std::string source, std::string input = {}) {
-  algorithm_trainer::NsJailPythonExecutor executor;
+  algorithm_trainer::IsolatedProcessExecutor executor{ALGORITHM_TRAINER_JUDGE_WORKER_PATH};
   return require_execution(executor.run({
       .language = "cpp",
       .source_code = std::move(source),
@@ -43,7 +44,7 @@ algorithm_trainer::ExecutionResult run_cpp(std::string source, std::string input
 
 algorithm_trainer::JudgeResult judge(std::string source, std::string language = "python",
                                      std::string problem_id = "a-plus-b") {
-  algorithm_trainer::NsJailPythonExecutor executor;
+  algorithm_trainer::IsolatedProcessExecutor executor{ALGORITHM_TRAINER_JUDGE_WORKER_PATH};
   algorithm_trainer::ProblemJudge judge{executor, test_problem_service()};
   return judge.run({
       .problem_id = std::move(problem_id),
@@ -54,7 +55,7 @@ algorithm_trainer::JudgeResult judge(std::string source, std::string language = 
 
 algorithm_trainer::Verdict require_verdict(algorithm_trainer::JudgeResult result) {
   if (const auto *error = std::get_if<algorithm_trainer::JudgeError>(&result)) {
-    SKIP("NsJail is unavailable in this kernel/environment: " << error->message);
+    FAIL("NsJail became unavailable after the test probe: " << error->message);
   }
   if (const auto *runtime_error = std::get_if<algorithm_trainer::RuntimeError>(&result)) {
     FAIL("Submission ended with " << runtime_error->type);
@@ -64,12 +65,28 @@ algorithm_trainer::Verdict require_verdict(algorithm_trainer::JudgeResult result
 
 } // namespace
 
+#define REQUIRE_NSJAIL_AVAILABLE()                                                                 \
+  do {                                                                                             \
+    algorithm_trainer::IsolatedProcessExecutor availability_executor{                              \
+        ALGORITHM_TRAINER_JUDGE_WORKER_PATH};                                                      \
+    const auto availability = availability_executor.run({                                          \
+        .language = "python",                                                                      \
+        .source_code = "print(1)\n",                                                               \
+    });                                                                                            \
+    if (const auto *availability_error =                                                           \
+            std::get_if<algorithm_trainer::ExecutorError>(&availability)) {                        \
+      SKIP("NsJail is unavailable in this kernel/environment: " << availability_error->message);   \
+    }                                                                                              \
+  } while (false)
+
 TEST_CASE("NsJail executes a correct A+B submission", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto verdict = require_verdict(judge("a, b = map(int, input().split())\nprint(a + b)\n"));
   CHECK(verdict == algorithm_trainer::Verdict::accepted);
 }
 
 TEST_CASE("NsJail accepts reference solutions for every added problem", "[sandbox][catalog]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const std::vector<std::pair<std::string, std::string>> solutions{
       {"merge-sort", R"(n = int(input())
 values = list(map(int, input().split()))
@@ -134,6 +151,7 @@ print(answer)
 }
 
 TEST_CASE("Merge Sort rejects a quadratic implementation on its large case", "[sandbox][catalog]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = judge(R"(n = int(input())
 values = list(map(int, input().split()))
 for index in range(1, n):
@@ -151,17 +169,21 @@ print(*values)
 }
 
 TEST_CASE("NsJail compiles and executes a C++20 submission", "[sandbox][cpp]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result =
       run_cpp("#include <iostream>\nint main() { long long a, b; std::cin >> a >> b; "
               "std::cout << a + b << '\\n'; }\n",
               "2 3\n");
 
+  INFO(result.standard_error);
+  INFO(result.error_type.value_or("no normalized error"));
   CHECK_FALSE(result.timed_out);
   CHECK(result.exit_code == 0);
   CHECK(result.standard_output == "5\n");
 }
 
 TEST_CASE("NsJail judges a correct C++20 A+B solution", "[sandbox][cpp]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = judge("#include <iostream>\nint main() { long long a, b; std::cin >> a >> b; "
                             "std::cout << a + b << '\\n'; }\n",
                             "cpp");
@@ -171,6 +193,7 @@ TEST_CASE("NsJail judges a correct C++20 A+B solution", "[sandbox][cpp]") {
 }
 
 TEST_CASE("NsJail reports C++ compilation errors safely", "[sandbox][cpp]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_cpp("int main( {\n");
 
   CHECK_FALSE(result.timed_out);
@@ -179,17 +202,20 @@ TEST_CASE("NsJail reports C++ compilation errors safely", "[sandbox][cpp]") {
 }
 
 TEST_CASE("NsJail applies runtime limits to C++ submissions", "[sandbox][cpp]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_cpp("int main() { volatile int value = 0; while (true) { ++value; } }\n");
 
   CHECK(result.timed_out);
 }
 
 TEST_CASE("NsJail output is judged normally", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto verdict = require_verdict(judge("print(999)\n"));
   CHECK(verdict == algorithm_trainer::Verdict::wrong_answer);
 }
 
 TEST_CASE("NsJail reports Python exceptions as non-zero exits", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python("raise RuntimeError('boom')\n");
   CHECK_FALSE(result.timed_out);
   CHECK(result.exit_code != 0);
@@ -197,6 +223,7 @@ TEST_CASE("NsJail reports Python exceptions as non-zero exits", "[sandbox]") {
 }
 
 TEST_CASE("NsJail reports Python syntax errors as non-zero exits", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python("if:\n");
   CHECK_FALSE(result.timed_out);
   CHECK(result.exit_code != 0);
@@ -204,11 +231,13 @@ TEST_CASE("NsJail reports Python syntax errors as non-zero exits", "[sandbox]") 
 }
 
 TEST_CASE("NsJail terminates infinite execution", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python("while True:\n    pass\n");
   CHECK(result.timed_out);
 }
 
 TEST_CASE("NsJail bounds combined stdout and stderr", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python("while True:\n    print('x' * 10000)\n");
   CHECK_FALSE(result.timed_out);
   CHECK(result.exit_code != 0);
@@ -217,6 +246,7 @@ TEST_CASE("NsJail bounds combined stdout and stderr", "[sandbox]") {
 }
 
 TEST_CASE("NsJail hides the host filesystem", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python(R"(
 try:
     open('/etc/passwd').read()
@@ -228,7 +258,25 @@ except (FileNotFoundError, PermissionError):
   CHECK(result.standard_output == "blocked\n");
 }
 
+TEST_CASE("judge worker does not expose backend secrets or inherited descriptors", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
+  const auto result = run_python(R"(
+import os
+names = sorted(os.environ)
+print(",".join(names))
+try:
+    os.fstat(3)
+    print("fd-exposed")
+except OSError:
+    print("fd-blocked")
+)");
+  CHECK(result.exit_code == 0);
+  CHECK(result.standard_output.find("ALGORITHM_TRAINER_DATABASE_URL") == std::string::npos);
+  CHECK(result.standard_output.find("fd-blocked") != std::string::npos);
+}
+
 TEST_CASE("NsJail denies network socket creation", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python(R"(
 import socket
 try:
@@ -242,6 +290,7 @@ except (OSError, PermissionError):
 }
 
 TEST_CASE("NsJail denies child process creation", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python(R"(
 import os
 try:
@@ -255,6 +304,7 @@ except (OSError, PermissionError):
 }
 
 TEST_CASE("NsJail bounds Python address space", "[sandbox]") {
+  REQUIRE_NSJAIL_AVAILABLE();
   const auto result = run_python("data = bytearray(512 * 1024 * 1024)\n");
   CHECK_FALSE(result.timed_out);
   CHECK(result.exit_code != 0);

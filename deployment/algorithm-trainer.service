@@ -1,0 +1,39 @@
+[Unit]
+Description=Algorithm Trainer web application and isolated judge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=algorithm-trainer
+Group=algorithm-trainer
+EnvironmentFile=/etc/algorithm-trainer/environment
+ExecStart=/opt/algorithm-trainer/bin/algorithm-trainer-backend
+Restart=on-failure
+RestartSec=2s
+
+# NsJail creates a child hierarchy for each compilation and execution. The backend moves itself
+# into a trusted sibling cgroup before enabling these controllers for untrusted work.
+Delegate=cpu memory pids
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=no
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

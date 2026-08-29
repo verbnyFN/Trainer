@@ -87,6 +87,10 @@ start_application() {
     echo "curl is unavailable. Run this command inside 'nix develop'." >&2
     exit 1
   }
+  command -v systemd-run >/dev/null 2>&1 || {
+    echo "systemd-run is required to delegate cgroup v2 controls to the judge." >&2
+    exit 1
+  }
   [[ -x "$backend_binary" ]] || {
     echo "Build the backend first with: cmake --build build" >&2
     exit 1
@@ -116,7 +120,8 @@ start_application() {
   }
   trap rollback_start ERR
 
-  setsid "$backend_binary" >>"$backend_log" 2>&1 </dev/null &
+  setsid systemd-run --user --scope --quiet --property=Delegate=yes \
+    "$backend_binary" >>"$backend_log" 2>&1 </dev/null &
   local backend_pid=$!
   printf '%s\n' "$backend_pid" > "$backend_pid_file"
   wait_until_ready "Backend" "http://127.0.0.1:8080/api/problems" "$backend_pid" \

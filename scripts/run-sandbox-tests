@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 1 ]; then
+  echo "Usage: scripts/run-sandbox-tests TEST_BINARY [ARGUMENT ...]" >&2
+  exit 2
+fi
+
+if [ "${ALGORITHM_TRAINER_CGROUP_DELEGATED:-}" = "1" ]; then
+  exec "$@"
+fi
+
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+nix_binary=$(command -v nix || true)
+if [ -z "$nix_binary" ] || ! command -v systemd-run >/dev/null 2>&1; then
+  echo "Sandbox tests require Nix and a systemd user manager with cgroup delegation" >&2
+  exit 1
+fi
+
+exec systemd-run --user --wait --pipe --quiet --collect \
+  --working-directory="$project_root" \
+  --property=Delegate=yes \
+  --property=Type=exec \
+  --setenv=ALGORITHM_TRAINER_CGROUP_DELEGATED=1 \
+  "$nix_binary" develop --command "$@"

@@ -37,13 +37,38 @@ constexpr std::size_t pipe_read_buffer_size{4096};
 constexpr mode_t writable_file_mode{0600};
 constexpr mode_t read_only_file_mode{0400};
 constexpr std::string_view seccomp_policy{
-    "ERRNO(1) { clone, fork, vfork, unshare, setns, socket, socketpair, connect, bind, "
-    "listen, accept, ptrace, process_vm_readv, process_vm_writev, mount, chroot, bpf, "
-    "perf_event_open, keyctl, add_key, request_key } DEFAULT ALLOW"}; // NOLINT
+    "ALLOW { read, write, close, newfstat, newfstatat, lseek, mmap, mprotect, munmap, brk, "
+    "rt_sigaction, rt_sigprocmask, rt_sigreturn, ioctl, pread64, access, pipe, pipe2, "
+    "select, pselect6, poll, ppoll, sched_yield, mremap, madvise, dup, dup2, dup3, "
+    "nanosleep, clock_nanosleep, getitimer, alarm, setitimer, getpid, gettid, getppid, "
+    "execve, exit, exit_group, wait4, waitid, kill, tgkill, newuname, fcntl, flock, "
+    "fsync, fdatasync, ftruncate, getcwd, chdir, readlink, readlinkat, getdents, getdents64, "
+    "fchmod, gettimeofday, getrlimit, prlimit64, getrusage, sysinfo, times, getuid, getgid, "
+    "geteuid, getegid, setsid, sigaltstack, statfs, fstatfs, prctl, arch_prctl, "
+    "set_tid_address, set_robust_list, futex, clock_gettime, openat, faccessat, faccessat2, "
+    "getrandom, rseq, statx, close_range, restart_syscall } DEFAULT ERRNO(1)"}; // NOLINT
 constexpr std::string_view compiler_seccomp_policy{
-    "ERRNO(1) { unshare, setns, socket, socketpair, connect, bind, listen, accept, ptrace, "
-    "process_vm_readv, process_vm_writev, mount, chroot, bpf, perf_event_open, keyctl, add_key, "
-    "request_key } DEFAULT ALLOW"}; // NOLINT
+    "ALLOW { read, write, close, newfstat, newfstatat, lseek, mmap, mprotect, munmap, brk, "
+    "rt_sigaction, rt_sigprocmask, rt_sigreturn, ioctl, pread64, access, pipe, pipe2, "
+    "select, pselect6, poll, ppoll, sched_yield, mremap, madvise, dup, dup2, dup3, "
+    "nanosleep, clock_nanosleep, getitimer, alarm, setitimer, getpid, gettid, getppid, "
+    "execve, exit, exit_group, wait4, waitid, kill, tgkill, newuname, fcntl, flock, "
+    "fsync, fdatasync, truncate, ftruncate, getcwd, chdir, rename, renameat, renameat2, mkdir, "
+    "mkdirat, rmdir, link, linkat, unlink, unlinkat, readlink, readlinkat, getdents, getdents64, "
+    "chmod, fchmod, fchmodat, gettimeofday, getrlimit, prlimit64, getrusage, sysinfo, times, "
+    "getuid, getgid, geteuid, getegid, setsid, sigaltstack, statfs, fstatfs, prctl, arch_prctl, "
+    "set_tid_address, set_robust_list, futex, clock_gettime, openat, faccessat, faccessat2, "
+    "getrandom, rseq, statx, close_range, restart_syscall, clone, clone3, fork, vfork, "
+    "setpgid, getpgid, getpgrp } DEFAULT ERRNO(1)"}; // NOLINT
+
+std::filesystem::path current_cgroupv2_mount() {
+  std::ifstream input{"/proc/self/cgroup"};
+  for (std::string line; std::getline(input, line);) {
+    if (line.starts_with("0::/") && line.find("..") == std::string::npos)
+      return std::filesystem::path{"/sys/fs/cgroup"} / line.substr(4);
+  }
+  return "/sys/fs/cgroup/algorithm-trainer-delegation-unavailable";
+}
 
 class TemporaryWorkspace {
 public:
@@ -155,6 +180,17 @@ std::optional<ExecutorError> write_file(const std::filesystem::path &path,
     return ExecutorError{"Could not protect executor input file: " +
                          std::string{std::strerror(errno)}};
   }
+  return std::nullopt;
+}
+
+std::optional<ExecutorError> protect_compiled_executable(const std::filesystem::path &path) {
+  FileDescriptor file{::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW)};
+  struct stat metadata{};
+  if (!file.valid() || ::fstat(file.get(), &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+      metadata.st_uid != ::getuid())
+    return ExecutorError{"Compiler did not produce a safe regular executable"};
+  if (::fchmod(file.get(), 0500) != 0)
+    return ExecutorError{"Could not protect the compiled executable"};
   return std::nullopt;
 }
 
@@ -277,6 +313,17 @@ nsjail_arguments(const NsJailPythonExecutorConfig &config, const TemporaryWorksp
       std::to_string(backup_time_limit),
       "--max_cpus",
       "1",
+      "--use_cgroupv2",
+      "--cgroupv2_mount",
+      config.cgroupv2_mount.string(),
+      "--cgroup_mem_max",
+      std::to_string(static_cast<std::uint64_t>(address_space_limit_megabytes) * 1024 * 1024),
+      "--cgroup_mem_swap_max",
+      "0",
+      "--cgroup_pids_max",
+      std::to_string(process_limit),
+      "--cgroup_cpu_ms_per_sec",
+      "1000",
       "--rlimit_as",
       std::to_string(address_space_limit_megabytes),
       "--rlimit_cpu",
@@ -511,6 +558,7 @@ NsJailPythonExecutorConfig NsJailPythonExecutor::default_config() {
       .python_runtime_closure_manifest = ALGORITHM_TRAINER_PYTHON_RUNTIME_CLOSURE,
       .cpp_compiler_path = ALGORITHM_TRAINER_CPP_COMPILER_PATH,
       .cpp_runtime_closure_manifest = ALGORITHM_TRAINER_CPP_RUNTIME_CLOSURE,
+      .cgroupv2_mount = current_cgroupv2_mount(),
   };
 }
 
@@ -576,6 +624,8 @@ ExecutorResult NsJailPythonExecutor::run( // NOLINT(readability-function-cogniti
       compilation_result.error_type = "Compilation Error";
       return compilation_result;
     }
+    if (const auto error = protect_compiled_executable(work / "submission"))
+      return *error;
   }
 
   const auto executable = request.language == "python"

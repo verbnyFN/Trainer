@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+if [ -z "${ALGORITHM_TRAINER_TEST_BASE_URL:-}" ]; then
+  echo "Set ALGORITHM_TRAINER_TEST_BASE_URL to a disposable running application"
+  exit 77
+fi
+
+test_directory=$(mktemp -d /tmp/algorithm-trainer-http-e2e-XXXXXX)
+trap 'rm -rf "$test_directory"' EXIT INT TERM
+cookie_jar="$test_directory/cookies"
+response_body="$test_directory/response.json"
+base_url=${ALGORITHM_TRAINER_TEST_BASE_URL%/}
+username="e2e-$(date +%s)-$$"
+
+request() {
+  expected_status=$1
+  shift
+  actual_status=$(curl --silent --show-error --output "$response_body" --write-out '%{http_code}' "$@")
+  if [ "$actual_status" != "$expected_status" ]; then
+    echo "Expected HTTP $expected_status, received $actual_status"
+    sed -n '1,20p' "$response_body"
+    exit 1
+  fi
+}
+
+request 200 "$base_url/api/problems/a-plus-b"
+if ! grep -q '"id"[[:space:]]*:[[:space:]]*"a-plus-b"' "$response_body"; then
+  echo "Public problem response did not contain A + B"
+  exit 1
+fi
+if grep -q 'hidden' "$response_body"; then
+  echo "Public problem response exposed hidden-test data"
+  exit 1
+fi
+
+request 400 --request POST --header 'Content-Type: application/json' \
+  --data '{' "$base_url/api/submissions"
+grep -q 'valid JSON' "$response_body"
+
+request 200 --request POST --cookie-jar "$cookie_jar" \
+  --header 'Content-Type: application/json' \
+  --data "{\"username\":\"$username\",\"password\":\"e2e-password-12345\"}" \
+  "$base_url/api/auth/register"
+grep -q "\"username\"[[:space:]]*:[[:space:]]*\"$username\"" "$response_body"
+
+request 202 --request POST --cookie "$cookie_jar" \
+  --header 'Content-Type: application/json' \
+  --data '{"problemId":"a-plus-b","language":"python","code":"a, b = map(int, input().split())\nprint(a + b)"}' \
+  "$base_url/api/submissions"
+submission_id=$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$response_body" | head -1)
+if [ -z "$submission_id" ]; then
+  echo "Submission response did not contain an id"
+  exit 1
+fi
+
+attempt=0
+while [ "$attempt" -lt 60 ]; do
+  request 200 --cookie "$cookie_jar" "$base_url/api/submissions/$submission_id"
+  if grep -q '"status"[[:space:]]*:[[:space:]]*"Completed"' "$response_body"; then
+    grep -q '"verdict"[[:space:]]*:[[:space:]]*"Accepted"' "$response_body"
+    request 200 --cookie "$cookie_jar" "$base_url/api/problems/a-plus-b/submissions"
+    grep -q "\"id\"[[:space:]]*:[[:space:]]*$submission_id" "$response_body"
+    exit 0
+  fi
+  if grep -q '"status"[[:space:]]*:[[:space:]]*"Failed"' "$response_body"; then
+    echo "Submission reached Failed instead of Accepted"
+    sed -n '1,20p' "$response_body"
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.25
+done
+
+echo "Submission did not complete before the test deadline"
+exit 1

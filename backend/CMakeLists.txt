@@ -10,6 +10,7 @@ pkg_check_modules(PostgreSQL REQUIRED IMPORTED_TARGET libpq)
 add_library(
   algorithm-trainer-core
   src/auth-service.cpp
+  src/isolated-process-executor.cpp
   src/judge.cpp
   src/mock-judge.cpp
   src/nsjail-python-executor.cpp
@@ -57,6 +58,16 @@ add_executable(algorithm-trainer-backend src/main.cpp)
 target_compile_features(algorithm-trainer-backend PRIVATE cxx_std_20)
 target_link_libraries(algorithm-trainer-backend PRIVATE algorithm-trainer-core)
 
+add_executable(algorithm-trainer-judge-worker src/judge-worker-main.cpp)
+target_compile_features(algorithm-trainer-judge-worker PRIVATE cxx_std_20)
+target_link_libraries(algorithm-trainer-judge-worker PRIVATE algorithm-trainer-core)
+
+target_compile_definitions(
+  algorithm-trainer-backend
+  PRIVATE ALGORITHM_TRAINER_JUDGE_WORKER_PATH="$<TARGET_FILE:algorithm-trainer-judge-worker>"
+)
+add_dependencies(algorithm-trainer-backend algorithm-trainer-judge-worker)
+
 add_executable(algorithm-trainer-migrate-sqlite src/sqlite-to-postgresql.cpp)
 target_compile_features(algorithm-trainer-migrate-sqlite PRIVATE cxx_std_20)
 target_include_directories(algorithm-trainer-migrate-sqlite PRIVATE src)
@@ -94,21 +105,34 @@ if(BUILD_TESTING)
     tests/nsjail-python-executor-test.cpp
   )
   target_compile_features(algorithm-trainer-sandbox-tests PRIVATE cxx_std_20)
+  target_compile_definitions(
+    algorithm-trainer-sandbox-tests
+    PRIVATE ALGORITHM_TRAINER_JUDGE_WORKER_PATH="$<TARGET_FILE:algorithm-trainer-judge-worker>"
+  )
+  add_dependencies(algorithm-trainer-sandbox-tests algorithm-trainer-judge-worker)
   target_link_libraries(
     algorithm-trainer-sandbox-tests
     PRIVATE
       algorithm-trainer-core
       Catch2::Catch2WithMain
   )
-  catch_discover_tests(
-    algorithm-trainer-sandbox-tests
-    TEST_PREFIX "sandbox: "
-    PROPERTIES LABELS sandbox
-  )
+  add_test(NAME "sandbox: hardened execution suite"
+           COMMAND sh "${PROJECT_SOURCE_DIR}/scripts/run-sandbox-tests"
+                   "$<TARGET_FILE:algorithm-trainer-sandbox-tests>")
+  set_tests_properties("sandbox: hardened execution suite" PROPERTIES
+                       LABELS sandbox
+                       TIMEOUT 120)
 
   add_executable(algorithm-trainer-postgresql-tests tests/postgresql-repository-test.cpp)
   target_compile_features(algorithm-trainer-postgresql-tests PRIVATE cxx_std_20)
   target_include_directories(algorithm-trainer-postgresql-tests PRIVATE src)
   target_link_libraries(algorithm-trainer-postgresql-tests PRIVATE algorithm-trainer-core Catch2::Catch2WithMain)
   catch_discover_tests(algorithm-trainer-postgresql-tests TEST_PREFIX "postgresql: " PROPERTIES LABELS postgresql)
+
+  add_test(NAME "http: complete application submission flow"
+           COMMAND sh "${PROJECT_SOURCE_DIR}/scripts/http-e2e-test")
+  set_tests_properties("http: complete application submission flow" PROPERTIES
+                       LABELS "http;e2e"
+                       SKIP_RETURN_CODE 77
+                       TIMEOUT 45)
 endif()

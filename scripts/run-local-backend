@@ -10,4 +10,5 @@ fi
 
 "$project_root/scripts/local-postgresql" setup
 source "$project_root/data/local-postgresql.env"
-exec "$project_root/build/backend/algorithm-trainer-backend"
+exec systemd-run --user --scope --quiet --property=Delegate=yes \
+  "$project_root/build/backend/algorithm-trainer-backend"

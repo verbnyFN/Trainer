@@ -1,52 +1,43 @@
 # Submission sandbox
 
-Python and C++20 submissions are executed through the NsJail-backed `Executor`. The backend starts
-the pinned NsJail binary directly with `fork()` and `execve()` and passes every argument separately.
-Submitted source and test input are written to fixed filenames and are never interpolated into a
-shell command. C++ compilation runs inside its own sandbox before execution. There is no shell
-invocation and no unsandboxed fallback.
+Python and C++20 submissions execute outside the backend process. For every test case, the backend
+starts the fixed `algorithm-trainer-judge-worker` executable with an empty environment and one
+Unix-domain socket. All unrelated inherited file descriptors are closed before `execve()`. A
+bounded, length-prefixed JSON protocol carries only the language, source, standard input, and the
+normalized result. The worker starts pinned NsJail directly; submitted text is never interpolated
+into a command. Worker or protocol failure is an infrastructure error, with no in-process or
+unsandboxed fallback.
 
 ## Limits
 
-Each test-case execution has these limits:
+Each runtime execution has:
 
-- 2 seconds of wall-clock time, enforced by the backend supervisor;
-- 4 seconds as an additional NsJail wall-time backstop;
-- 3 seconds of CPU time through `RLIMIT_CPU`;
-- one available CPU;
-- 128 MiB address space through `RLIMIT_AS`;
-- 4 processes through `RLIMIT_NPROC`, with `clone`, `fork`, and `vfork` also denied by seccomp;
-- 16 open files;
-- 16 MiB stack;
-- 1 MiB file size through `RLIMIT_FSIZE`;
-- 64 KiB combined captured stdout and stderr.
+- a 2-second backend wall limit and 4-second NsJail backstop;
+- 3 seconds of `RLIMIT_CPU` and one CPU of cgroup bandwidth;
+- 128 MiB total cgroup memory with swap disabled, plus `RLIMIT_AS` as defense in depth;
+- 4 processes for the complete cgroup, plus `RLIMIT_NPROC`;
+- 16 open files, a 16 MiB stack, a 1 MiB file-size limit, and 64 KiB combined output.
 
-The backend terminates the NsJail supervisor when the output limit is crossed and returns a non-zero
-execution result. The current public verdict model has no Output Limit Exceeded verdict, so the judge
-maps this condition to **Runtime Error**.
+C++ compilation has separate 15-second wall, 12-second CPU, 1 GiB cgroup-memory, 32-process,
+16-open-file, and 16 MiB output-file limits. The compiler and linker may create their required child
+processes. The trusted worker opens the output with `O_NOFOLLOW`, verifies that it is a regular file
+owned by the service user, and makes only that file executable. Compiler details are normalized to
+`Compilation Error` and are not returned to clients.
 
-C++ compilation has a separate 15-second wall limit, 12-second CPU limit, 1 GiB address-space limit,
-32-process limit, and 16 MiB file-size limit. It may create compiler/linker subprocesses, but retains
-the filesystem, namespace, network, ptrace, mount, and capability restrictions. Compiler diagnostics
-are reduced to a normalized `Compilation Error` category and are not returned to clients.
+CPU, memory, swap, and PID limits apply through cgroup v2 to the complete NsJail process tree.
+Rlimits remain per-process backstops; they are not the primary accounting mechanism.
 
-## Filesystem and environment
+## Filesystem, namespaces, and environment
 
-Every execution gets a new mode-0700 directory created with `mkdtemp()`. Its private root is mounted
-read-only. The only writable bind mount visible to submitted programs and the compiler is
-`/workspace`, containing the current source, input, and—after successful C++ compilation—the output
-binary. Standard input is opened by the trusted parent and connected to the jailed process.
+Every execution gets a fresh mode-0700 temporary directory. Its private root is read-only and only
+`/workspace` is writable. The exact pinned Nix runtime/compiler closure is mounted one store path at
+a time, read-only. The repository, home directory, database, `/etc`, `/proc`, `/sys`, and general
+`/dev` tree are absent. Standard input is opened by the trusted parent. RAII cleanup removes the
+workspace on normal exit, error, timeout, and output-limit termination.
 
-The exact transitive Nix closure of the selected pinned runtime/compiler is mounted one store path at
-a time, read-only, at its original `/nix/store/...` location. The complete host `/nix/store` is not mounted.
-No repository, home directory, database, `/etc`, `/proc`, `/sys`, or general `/dev` tree is mounted.
-
-NsJail creates new user, mount, PID, IPC, UTS, cgroup, and network namespaces. The loopback interface
-is disabled. Seccomp additionally denies socket creation and connection, process creation, namespace
-changes, mounting, ptrace/process-memory access, BPF, performance events, and kernel keyring access.
-Capabilities are dropped and `NO_NEW_PRIVS` remains enabled.
-
-The host environment is cleared. Python receives only:
+NsJail creates user, mount, PID, IPC, UTS, cgroup, and network namespaces. Loopback is disabled,
+capabilities are dropped, and `NO_NEW_PRIVS` remains enabled. The worker receives no backend
+environment. Python receives only:
 
 ```text
 HOME=/workspace
@@ -56,35 +47,37 @@ PYTHONDONTWRITEBYTECODE=1
 PYTHONNOUSERSITE=1
 ```
 
-An RAII workspace owner recursively removes the temporary directory on every return path, including
-normal exits, timeouts, output-limit termination, and infrastructure errors.
+## Syscall policy
 
-## NixOS and kernel requirements
+Seccomp uses distinct default-deny Kafel allowlists for runtime programs and compilation. Runtime
+allows file reading, memory management, signals, clocks, and other operations required by pinned
+Python and ordinary C++ programs. It contains no networking, process creation, namespace, mount,
+ptrace/process-memory, BPF, performance-event, or kernel-keyring syscall. Compilation adds only the
+filesystem and process operations required by pinned Clang and its linker, while still excluding
+networking, namespace, mount, ptrace, BPF, and keyring operations. Unknown syscalls fail with
+`EPERM`.
 
-Enter the pinned environment with `nix develop`. It provides NsJail, Python, and Clang without global
-installation. The development-shell `nsjail --version` shim reports the pinned package version because
-upstream NsJail 3.6 does not implement that option; all other arguments are forwarded to the package.
-The backend is compiled with the absolute path of the real NsJail binary, not the shim.
+## Host and deployment requirements
 
-The host must be Linux and permit the service user to create unprivileged user, mount, PID, IPC, UTS,
-cgroup, and network namespaces. It must support seccomp-BPF and the required bind mounts/pivot-root
-operations. On NixOS, ensure unprivileged user namespaces have not been disabled by hardening policy.
-Containerized deployments must delegate the same namespace and seccomp capabilities; otherwise the
-executor returns an infrastructure error and never runs submitted code outside NsJail.
+The host must be Linux with unprivileged user, mount, PID, IPC, UTS, cgroup, and network namespaces,
+plus seccomp-BPF. It must provide a writable delegated cgroup v2 subtree with `cpu`, `memory`, and
+`pids`. The backend moves itself into a trusted child cgroup and gives NsJail the empty delegated
+parent. Missing delegation fails closed.
 
-The current executor uses rlimits rather than writable cgroup controllers, so it does not require a
-delegated cgroup subtree.
+`deployment/algorithm-trainer.service` supplies `Delegate=cpu memory pids` and baseline systemd
+hardening. Local launchers request an equivalent transient user scope. Containers must explicitly
+provide the same writable delegation and namespace/seccomp facilities; a read-only cgroup mount or
+container without delegation is unsupported.
 
-## Known limitations
+## Verification and remaining boundary
 
-- The seccomp policies are targeted denylists, not minimal syscall allowlists. A production security
-  review should replace them with runtime-specific allowlists and regression tests.
-- Runtime closures are intentionally readable and include transitive dependencies. They
-  contains no application data, but it is broader than a purpose-built minimal Python image.
-- `RLIMIT_AS` limits virtual address space for submitted processes; it is not cgroup
-  accounting across a process tree. Process-creation syscalls are denied as an additional control.
-- Judging is synchronous, so deployment must also impose request and concurrency limits to prevent
-  many simultaneous sandboxes from exhausting host resources.
-- NsJail is one defense layer, not a guarantee against kernel vulnerabilities. An internet-facing
-  deployment should use a dedicated unprivileged service account, timely kernel/NsJail updates,
-  mandatory access control, and independent host-level monitoring.
+The sandbox suite executes real Python and C++ and verifies reference solutions, timeouts, memory and
+output exhaustion, compilation errors, hidden host files, blocked network sockets and child
+processes, and absence of backend secrets/descriptors. Run it through CTest inside `nix develop`;
+the test launcher creates its delegated transient service.
+
+Runtime closures are read-only and contain no application data, but are broader than purpose-built
+minimal images. NsJail and cgroups cannot guarantee safety against a kernel vulnerability.
+Internet-facing deployments should use the dedicated service account/unit as a baseline, keep the
+kernel and NsJail current, add host-appropriate mandatory access control, and monitor worker/cgroup
+failures independently.

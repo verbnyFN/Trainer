@@ -13,6 +13,7 @@ Supported verdicts are Accepted, Wrong Answer, Runtime Error, and Time Limit Exc
 - Nix with flakes enabled
 - Kernel support for unprivileged user, mount, PID, IPC, UTS, cgroup, and network namespaces
 - seccomp-BPF support
+- systemd with delegation of cgroup v2 `cpu`, `memory`, and `pids` controllers
 
 All build and runtime dependencies are pinned by `flake.lock`; no global NsJail, Python, C++, Node.js,
 or PostgreSQL installation is required outside the development shell.
@@ -29,8 +30,23 @@ ctest --test-dir build --output-on-failure
 pnpm --dir frontend build
 ```
 
-The NsJail integration tests require the host to permit unprivileged namespaces. A host hardening
-policy or restricted container may prevent those tests from running.
+The NsJail integration tests run in a transient delegated systemd user service. The host must permit
+unprivileged namespaces and user services; a restrictive container or hardening policy causes the
+suite to fail rather than silently reducing isolation.
+
+The PostgreSQL and live HTTP suites are environment-gated so normal unit tests never modify an
+existing database or application. Run them only against disposable instances:
+
+```bash
+ALGORITHM_TRAINER_TEST_DATABASE_URL='postgresql:///algorithm_trainer_test' \
+  ctest --test-dir build --output-on-failure -L postgresql
+
+ALGORITHM_TRAINER_TEST_BASE_URL='http://127.0.0.1:8080' \
+  ctest --test-dir build --output-on-failure -L http
+```
+
+The HTTP suite registers a temporary user and submits a real Python A+B solution, so its target
+database and judge must be disposable and fully operational.
 
 ## Run locally
 
@@ -92,15 +108,16 @@ Hidden test cases and sandbox diagnostics are never returned through the API.
 - `docs/database.md`: submission persistence details
 - `docs/sandbox.md`: isolation model, exact limits, host requirements, and known limitations
 
-Python and C++20 submissions are passed through the `Executor` abstraction to NsJail. C++ source is
-compiled inside a restricted sandbox before the resulting binary is executed; there is no
-unsandboxed fallback. Each hidden case runs in a fresh temporary workspace with restricted
-filesystem, environment, networking, processes, memory, CPU, wall time, and output. See
+Python and C++20 submissions pass through the `Executor` abstraction to a separate, environment-free
+judge-worker process and then to NsJail. C++ source is compiled inside a restricted sandbox before
+the resulting binary is executed; there is no in-process or unsandboxed fallback. Each hidden case
+runs in a fresh cgroup and temporary workspace with restricted filesystem, environment, networking,
+processes, memory, CPU, wall time, and output. See
 [`docs/sandbox.md`](docs/sandbox.md) for the complete security model.
 
 ## Current scope
 
-The MVP supports one problem, Python and C++20 submissions, username/password authentication, and
-per-problem submission history for authenticated users. Judging is synchronous. Password recovery,
-OAuth, queues, additional languages, and distributed execution are intentionally outside the current
-scope.
+The application supports a small problem catalog, Python and C++20 submissions, username/password
+authentication, and per-problem submission history for authenticated users. Submissions are judged
+by a persistent asynchronous worker queue. Password recovery, OAuth, additional languages, and
+distributed execution are intentionally outside the current scope.

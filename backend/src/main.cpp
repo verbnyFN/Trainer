@@ -1,6 +1,6 @@
 #include "algorithm-trainer/admin-validation.h"
 #include "algorithm-trainer/auth-service.h"
-#include "algorithm-trainer/nsjail-python-executor.h"
+#include "algorithm-trainer/isolated-process-executor.h"
 #include "algorithm-trainer/postgresql-problem-repository.h"
 #include "algorithm-trainer/postgresql-submission-repository.h"
 #include "algorithm-trainer/problem-judge.h"
@@ -823,7 +823,11 @@ void admin_retry_submission(const drogon::HttpRequestPtr &request, ResponseCallb
 
 int main() {
   constexpr std::uint16_t port{8080};
-  algorithm_trainer::NsJailPythonExecutor executor;
+  algorithm_trainer::IsolatedProcessExecutor executor{ALGORITHM_TRAINER_JUDGE_WORKER_PATH};
+  if (const auto &error = executor.initialization_error()) {
+    LOG_ERROR << "Judge isolation initialization failed: " << *error;
+    return 1;
+  }
   const auto *configured_database = std::getenv("ALGORITHM_TRAINER_DATABASE_URL");
   if (configured_database == nullptr || std::string_view{configured_database}.empty()) {
     LOG_ERROR << "ALGORITHM_TRAINER_DATABASE_URL is required";
