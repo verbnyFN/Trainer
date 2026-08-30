@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+runtime_directory="$project_root/data/run"
+backend_pid_file="$runtime_directory/backend.pid"
+frontend_pid_file="$runtime_directory/frontend.pid"
+backend_log="$project_root/data/backend.log"
+frontend_log="$project_root/data/frontend.log"
+backend_binary="$project_root/build/backend/algorithm-trainer-backend"
+vite_binary="$project_root/frontend/node_modules/.bin/vite"
+frontend_marker="vite/bin/vite.js"
+
+process_matches() {
+  local pid="$1"
+  local marker="$2"
+  kill -0 "$pid" 2>/dev/null || return 1
+  local command_line
+  command_line="$(ps -p "$pid" -o args= 2>/dev/null)"
+  [[ "$command_line" == *"$marker"* ]]
+}
+
+managed_process_running() {
+  local pid_file="$1"
+  local marker="$2"
+  [[ -f "$pid_file" ]] || return 1
+  local pid
+  pid="$(<"$pid_file")"
+  [[ "$pid" =~ ^[0-9]+$ ]] && process_matches "$pid" "$marker"
+}
+
+stop_process() {
+  local name="$1"
+  local pid_file="$2"
+  local marker="$3"
+  if ! managed_process_running "$pid_file" "$marker"; then
+    rm -f "$pid_file"
+    return
+  fi
+  local pid
+  pid="$(<"$pid_file")"
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  for _ in {1..50}; do
+    if ! process_matches "$pid" "$marker"; then
+      rm -f "$pid_file"
+      echo "$name stopped."
+      return
+    fi
+    sleep 0.1
+  done
+  kill -KILL -- "-$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+  echo "$name was force-stopped."
+}
+
+wait_until_ready() {
+  local name="$1"
+  local url="$2"
+  local pid="$3"
+  local marker="$4"
+  for _ in {1..100}; do
+    if ! process_matches "$pid" "$marker"; then
+      echo "$name exited during startup. Check data/${name,,}.log." >&2
+      return 1
+    fi
+    if curl --silent --fail --output /dev/null "$url"; then
+      return
+    fi
+    sleep 0.1
+  done
+  echo "$name did not become ready. Check data/${name,,}.log." >&2
+  return 1
+}
+
+stop_application() {
+  stop_process "Frontend" "$frontend_pid_file" "$frontend_marker"
+  stop_process "Backend" "$backend_pid_file" "$backend_binary"
+  "$project_root/scripts/local-postgresql" stop
+}
+
+start_application() {
+  command -v setsid >/dev/null 2>&1 || {
+    echo "setsid is unavailable. Run this command inside 'nix develop'." >&2
+    exit 1
+  }
+  command -v curl >/dev/null 2>&1 || {
+    echo "curl is unavailable. Run this command inside 'nix develop'." >&2
+    exit 1
+  }
+  [[ -x "$backend_binary" ]] || {
+    echo "Build the backend first with: cmake --build build" >&2
+    exit 1
+  }
+  [[ -x "$vite_binary" ]] || {
+    echo "Install frontend dependencies first with: pnpm --dir frontend install --frozen-lockfile" >&2
+    exit 1
+  }
+  if managed_process_running "$backend_pid_file" "$backend_binary" && \
+      managed_process_running "$frontend_pid_file" "$frontend_marker"; then
+    "$project_root/scripts/local-postgresql" status >/dev/null
+    echo "Algorithm Trainer is already running at http://127.0.0.1:5173"
+    return
+  fi
+
+  mkdir -p "$runtime_directory"
+  stop_process "Frontend" "$frontend_pid_file" "$frontend_marker"
+  stop_process "Backend" "$backend_pid_file" "$backend_binary"
+  "$project_root/scripts/local-postgresql" setup
+  source "$project_root/data/local-postgresql.env"
+
+  rollback_start() {
+    trap - ERR
+    stop_process "Frontend" "$frontend_pid_file" "$frontend_marker"
+    stop_process "Backend" "$backend_pid_file" "$backend_binary"
+    "$project_root/scripts/local-postgresql" stop || true
+  }
+  trap rollback_start ERR
+
+  setsid "$backend_binary" >>"$backend_log" 2>&1 </dev/null &
+  local backend_pid=$!
+  printf '%s\n' "$backend_pid" > "$backend_pid_file"
+  wait_until_ready "Backend" "http://127.0.0.1:8080/api/problems" "$backend_pid" \
+    "$backend_binary"
+
+  setsid "$vite_binary" "$project_root/frontend" --host 127.0.0.1 \
+    >>"$frontend_log" 2>&1 </dev/null &
+  local frontend_pid=$!
+  printf '%s\n' "$frontend_pid" > "$frontend_pid_file"
+  wait_until_ready "Frontend" "http://127.0.0.1:5173" "$frontend_pid" "$frontend_marker"
+  trap - ERR
+  echo "Algorithm Trainer started at http://127.0.0.1:5173"
+  echo "Logs: data/backend.log and data/frontend.log"
+}
+
+show_status() {
+  local failed=0
+  if managed_process_running "$backend_pid_file" "$backend_binary"; then
+    echo "Backend: running"
+  else
+    echo "Backend: stopped"
+    failed=1
+  fi
+  if managed_process_running "$frontend_pid_file" "$frontend_marker"; then
+    echo "Frontend: running"
+  else
+    echo "Frontend: stopped"
+    failed=1
+  fi
+  if "$project_root/scripts/local-postgresql" status >/dev/null 2>&1; then
+    echo "PostgreSQL: running"
+  else
+    echo "PostgreSQL: stopped"
+    failed=1
+  fi
+  return "$failed"
+}
+
+case "${1:-start}" in
+  start)
+    start_application
+    ;;
+  stop)
+    stop_application
+    ;;
+  restart)
+    stop_application
+    start_application
+    ;;
+  status)
+    show_status
+    ;;
+  *)
+    echo "Usage: scripts/local-app [start|stop|restart|status]" >&2
+    exit 2
+    ;;
+esac

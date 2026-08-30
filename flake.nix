@@ -30,6 +30,7 @@
           clang
           clang-tools
           cmake
+          curl
           drogon
           git
           ninja
@@ -37,6 +38,7 @@
           nsjailWithVersion
           pkg-config
           pnpm
+          postgresql
           python3
           libsodium
           sqlite

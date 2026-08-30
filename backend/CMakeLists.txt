@@ -5,6 +5,7 @@ find_package(Drogon CONFIG REQUIRED)
 unset(CMAKE_CXX_STANDARD)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(Sodium REQUIRED IMPORTED_TARGET libsodium)
+pkg_check_modules(PostgreSQL REQUIRED IMPORTED_TARGET libpq)
 
 add_library(
   algorithm-trainer-core
@@ -15,6 +16,10 @@ add_library(
   src/problem.cpp
   src/problem-judge.cpp
   src/problem-service.cpp
+  src/postgresql-auth-service.cpp
+  src/postgresql-client.cpp
+  src/postgresql-problem-repository.cpp
+  src/postgresql-submission-repository.cpp
   src/sqlite-problem-repository.cpp
   src/sqlite-submission-repository.cpp
   src/submission.cpp
@@ -46,11 +51,16 @@ target_compile_definitions(
 )
 target_compile_features(algorithm-trainer-core PUBLIC cxx_std_20)
 target_include_directories(algorithm-trainer-core PUBLIC include)
-target_link_libraries(algorithm-trainer-core PUBLIC Drogon::Drogon PkgConfig::Sodium SQLite3_lib)
+target_link_libraries(algorithm-trainer-core PUBLIC Drogon::Drogon PkgConfig::Sodium PkgConfig::PostgreSQL SQLite3_lib)
 
 add_executable(algorithm-trainer-backend src/main.cpp)
 target_compile_features(algorithm-trainer-backend PRIVATE cxx_std_20)
 target_link_libraries(algorithm-trainer-backend PRIVATE algorithm-trainer-core)
+
+add_executable(algorithm-trainer-migrate-sqlite src/sqlite-to-postgresql.cpp)
+target_compile_features(algorithm-trainer-migrate-sqlite PRIVATE cxx_std_20)
+target_include_directories(algorithm-trainer-migrate-sqlite PRIVATE src)
+target_link_libraries(algorithm-trainer-migrate-sqlite PRIVATE algorithm-trainer-core)
 
 if(BUILD_TESTING)
   find_package(Catch2 3 CONFIG REQUIRED)
@@ -95,4 +105,10 @@ if(BUILD_TESTING)
     TEST_PREFIX "sandbox: "
     PROPERTIES LABELS sandbox
   )
+
+  add_executable(algorithm-trainer-postgresql-tests tests/postgresql-repository-test.cpp)
+  target_compile_features(algorithm-trainer-postgresql-tests PRIVATE cxx_std_20)
+  target_include_directories(algorithm-trainer-postgresql-tests PRIVATE src)
+  target_link_libraries(algorithm-trainer-postgresql-tests PRIVATE algorithm-trainer-core Catch2::Catch2WithMain)
+  catch_discover_tests(algorithm-trainer-postgresql-tests TEST_PREFIX "postgresql: " PROPERTIES LABELS postgresql)
 endif()

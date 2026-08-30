@@ -1,15 +1,16 @@
 #include "algorithm-trainer/admin-validation.h"
 #include "algorithm-trainer/auth-service.h"
 #include "algorithm-trainer/nsjail-python-executor.h"
+#include "algorithm-trainer/postgresql-problem-repository.h"
+#include "algorithm-trainer/postgresql-submission-repository.h"
 #include "algorithm-trainer/problem-judge.h"
 #include "algorithm-trainer/problem-service.h"
 #include "algorithm-trainer/problem.h"
-#include "algorithm-trainer/sqlite-problem-repository.h"
-#include "algorithm-trainer/sqlite-submission-repository.h"
 #include "algorithm-trainer/submission-record.h"
 #include "algorithm-trainer/submission-service.h"
 #include "algorithm-trainer/submission-worker.h"
 #include "algorithm-trainer/submission.h"
+#include "postgresql-client.h"
 
 #include <drogon/drogon.h>
 
@@ -84,7 +85,7 @@ void auth_result(algorithm_trainer::AuthService::SessionResult result, ResponseC
 }
 
 void register_user(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                   algorithm_trainer::AuthService &auth_service, bool secure_cookie) {
+                   algorithm_trainer::AuthProvider &auth_service, bool secure_cookie) {
   const auto json = request->getJsonObject();
   if (json == nullptr || !(*json)["username"].isString() || !(*json)["password"].isString()) {
     callback(error_response("Username and password are required", drogon::k400BadRequest));
@@ -96,7 +97,7 @@ void register_user(const drogon::HttpRequestPtr &request, ResponseCallback &&cal
 }
 
 void login(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-           algorithm_trainer::AuthService &auth_service, bool secure_cookie) {
+           algorithm_trainer::AuthProvider &auth_service, bool secure_cookie) {
   const auto json = request->getJsonObject();
   if (json == nullptr || !(*json)["username"].isString() || !(*json)["password"].isString()) {
     callback(error_response("Invalid username or password", drogon::k401Unauthorized));
@@ -107,7 +108,7 @@ void login(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
 }
 
 void current_user(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                  algorithm_trainer::AuthService &auth_service) {
+                  algorithm_trainer::AuthProvider &auth_service) {
   auto result = auth_service.current_user(request->getCookie(std::string{session_cookie_name}));
   if (const auto *user = std::get_if<algorithm_trainer::AuthUser>(&result)) {
     callback(drogon::HttpResponse::newHttpJsonResponse(user_to_json(*user)));
@@ -124,7 +125,7 @@ void current_user(const drogon::HttpRequestPtr &request, ResponseCallback &&call
 }
 
 void logout(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-            algorithm_trainer::AuthService &auth_service, bool secure_cookie) {
+            algorithm_trainer::AuthProvider &auth_service, bool secure_cookie) {
   auto result = auth_service.logout(request->getCookie(std::string{session_cookie_name}));
   if (const auto *error = std::get_if<algorithm_trainer::AuthError>(&result)) {
     LOG_ERROR << "Logout failed: " << error->message;
@@ -221,7 +222,7 @@ void list_problems(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
 
 void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
             algorithm_trainer::SubmissionService &submission_service,
-            algorithm_trainer::AuthService &auth_service,
+            algorithm_trainer::AuthProvider &auth_service,
             algorithm_trainer::ProblemService &problems) {
   const auto json = request->getJsonObject();
   if (json == nullptr) {
@@ -300,7 +301,7 @@ void submit(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
 void submission_history(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
                         const std::string &problem_id,
                         algorithm_trainer::SubmissionService &submission_service,
-                        algorithm_trainer::AuthService &auth_service,
+                        algorithm_trainer::AuthProvider &auth_service,
                         algorithm_trainer::ProblemService &problems) {
   auto problem = problems.find(problem_id);
   if (std::holds_alternative<algorithm_trainer::ProblemRepositoryError>(problem)) {
@@ -341,7 +342,7 @@ void submission_history(const drogon::HttpRequestPtr &request, ResponseCallback 
 
 void profile(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
              algorithm_trainer::SubmissionService &submission_service,
-             algorithm_trainer::AuthService &auth_service,
+             algorithm_trainer::AuthProvider &auth_service,
              algorithm_trainer::ProblemService &problems) {
   auto authenticated =
       auth_service.current_user(request->getCookie(std::string{session_cookie_name}));
@@ -434,7 +435,7 @@ void get_submission(const drogon::HttpRequestPtr &, ResponseCallback &&callback,
 }
 
 bool require_admin(const drogon::HttpRequestPtr &request, ResponseCallback &callback,
-                   algorithm_trainer::AuthService &auth_service) {
+                   algorithm_trainer::AuthProvider &auth_service) {
   auto result = auth_service.current_user(request->getCookie(std::string{session_cookie_name}));
   if (const auto *user = std::get_if<algorithm_trainer::AuthUser>(&result)) {
     if (algorithm_trainer::has_admin_access(*user))
@@ -454,7 +455,7 @@ bool require_admin(const drogon::HttpRequestPtr &request, ResponseCallback &call
 }
 
 std::int64_t authenticated_admin_id(const drogon::HttpRequestPtr &request,
-                                    algorithm_trainer::AuthService &auth_service) {
+                                    algorithm_trainer::AuthProvider &auth_service) {
   const auto result =
       auth_service.current_user(request->getCookie(std::string{session_cookie_name}));
   return std::get<algorithm_trainer::AuthUser>(result).id;
@@ -552,7 +553,7 @@ parse_admin_test(const Json::Value &json, std::int64_t id = 0) {
 }
 
 void admin_list_problems(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                         algorithm_trainer::AuthService &auth,
+                         algorithm_trainer::AuthProvider &auth,
                          algorithm_trainer::ProblemRepository &repository) {
   if (!require_admin(request, callback, auth))
     return;
@@ -572,7 +573,7 @@ void admin_list_problems(const drogon::HttpRequestPtr &request, ResponseCallback
 }
 
 void admin_get_problem(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                       const std::string &id, algorithm_trainer::AuthService &auth,
+                       const std::string &id, algorithm_trainer::AuthProvider &auth,
                        algorithm_trainer::ProblemRepository &repository) {
   if (!require_admin(request, callback, auth))
     return;
@@ -592,7 +593,7 @@ void admin_get_problem(const drogon::HttpRequestPtr &request, ResponseCallback &
 }
 
 void admin_write_problem(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                         std::optional<std::string> id, algorithm_trainer::AuthService &auth,
+                         std::optional<std::string> id, algorithm_trainer::AuthProvider &auth,
                          algorithm_trainer::ProblemRepository &repository,
                          algorithm_trainer::SubmissionRepository &audit_repository) {
   if (!require_admin(request, callback, auth))
@@ -627,7 +628,7 @@ void admin_write_problem(const drogon::HttpRequestPtr &request, ResponseCallback
 }
 
 void admin_delete_problem(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                          const std::string &id, algorithm_trainer::AuthService &auth,
+                          const std::string &id, algorithm_trainer::AuthProvider &auth,
                           algorithm_trainer::ProblemRepository &repository,
                           algorithm_trainer::SubmissionRepository &audit_repository) {
   if (!require_admin(request, callback, auth))
@@ -649,7 +650,7 @@ void admin_delete_problem(const drogon::HttpRequestPtr &request, ResponseCallbac
 
 void admin_write_test(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
                       const std::string &problem_id, std::optional<std::string> raw_test_id,
-                      algorithm_trainer::AuthService &auth,
+                      algorithm_trainer::AuthProvider &auth,
                       algorithm_trainer::ProblemRepository &repository,
                       algorithm_trainer::SubmissionRepository &audit_repository) {
   if (!require_admin(request, callback, auth))
@@ -697,7 +698,7 @@ void admin_write_test(const drogon::HttpRequestPtr &request, ResponseCallback &&
 
 void admin_delete_test(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
                        const std::string &problem_id, const std::string &raw_test_id,
-                       algorithm_trainer::AuthService &auth,
+                       algorithm_trainer::AuthProvider &auth,
                        algorithm_trainer::ProblemRepository &repository,
                        algorithm_trainer::SubmissionRepository &audit_repository) {
   if (!require_admin(request, callback, auth))
@@ -724,7 +725,7 @@ void admin_delete_test(const drogon::HttpRequestPtr &request, ResponseCallback &
 }
 
 void admin_submissions(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                       std::optional<std::string> raw_id, algorithm_trainer::AuthService &auth,
+                       std::optional<std::string> raw_id, algorithm_trainer::AuthProvider &auth,
                        algorithm_trainer::SubmissionRepository &repository) {
   if (!require_admin(request, callback, auth))
     return;
@@ -795,7 +796,7 @@ void admin_submissions(const drogon::HttpRequestPtr &request, ResponseCallback &
 }
 
 void admin_retry_submission(const drogon::HttpRequestPtr &request, ResponseCallback &&callback,
-                            const std::string &raw_id, algorithm_trainer::AuthService &auth,
+                            const std::string &raw_id, algorithm_trainer::AuthProvider &auth,
                             algorithm_trainer::SubmissionRepository &repository,
                             const std::function<void()> &notify_workers) {
   if (!require_admin(request, callback, auth))
@@ -823,25 +824,33 @@ void admin_retry_submission(const drogon::HttpRequestPtr &request, ResponseCallb
 int main() {
   constexpr std::uint16_t port{8080};
   algorithm_trainer::NsJailPythonExecutor executor;
-  const auto *configured_database = std::getenv("ALGORITHM_TRAINER_DATABASE");
-  const auto database_path = configured_database == nullptr
-                                 ? std::filesystem::path{"data/algorithm-trainer.sqlite3"}
-                                 : std::filesystem::path{configured_database};
-  auto repository_result = algorithm_trainer::SQLiteSubmissionRepository::open(database_path);
+  const auto *configured_database = std::getenv("ALGORITHM_TRAINER_DATABASE_URL");
+  if (configured_database == nullptr || std::string_view{configured_database}.empty()) {
+    LOG_ERROR << "ALGORITHM_TRAINER_DATABASE_URL is required";
+    return 1;
+  }
+  const std::string database_url{configured_database};
+  if (const auto error = algorithm_trainer::postgresql::apply_migrations(database_url)) {
+    LOG_ERROR << "Database migration failed: " << *error;
+    return 1;
+  }
+  auto repository_result = algorithm_trainer::PostgreSQLSubmissionRepository::open(database_url);
   if (const auto *error = std::get_if<algorithm_trainer::RepositoryError>(&repository_result)) {
     LOG_ERROR << "Database initialization failed: " << error->message;
     return 1;
   }
-  auto repository = std::get<std::unique_ptr<algorithm_trainer::SQLiteSubmissionRepository>>(
+  auto repository = std::get<std::unique_ptr<algorithm_trainer::PostgreSQLSubmissionRepository>>(
       std::move(repository_result));
-  auto problem_repository_result = algorithm_trainer::SQLiteProblemRepository::open(database_path);
+  auto problem_repository_result =
+      algorithm_trainer::PostgreSQLProblemRepository::open(database_url);
   if (const auto *error =
           std::get_if<algorithm_trainer::ProblemRepositoryError>(&problem_repository_result)) {
     LOG_ERROR << "Problem database initialization failed: " << error->message;
     return 1;
   }
-  auto problem_repository = std::get<std::unique_ptr<algorithm_trainer::SQLiteProblemRepository>>(
-      std::move(problem_repository_result));
+  auto problem_repository =
+      std::get<std::unique_ptr<algorithm_trainer::PostgreSQLProblemRepository>>(
+          std::move(problem_repository_result));
   algorithm_trainer::ProblemService problem_service{*problem_repository};
   algorithm_trainer::ProblemJudge judge{executor, problem_service};
   algorithm_trainer::SubmissionWorkerPool worker_pool{judge, *repository, 2};
@@ -851,14 +860,21 @@ int main() {
   }
   algorithm_trainer::SubmissionService submission_service{*repository,
                                                           [&worker_pool] { worker_pool.notify(); }};
-  auto auth_result = algorithm_trainer::AuthService::open(database_path);
+  auto auth_result = algorithm_trainer::PostgreSQLAuthService::open(database_url);
   if (const auto *error = std::get_if<algorithm_trainer::AuthError>(&auth_result)) {
     LOG_ERROR << "Authentication initialization failed: " << error->message;
     return 1;
   }
   auto auth_service =
-      std::get<std::unique_ptr<algorithm_trainer::AuthService>>(std::move(auth_result));
-  auto admin_result = auth_service->ensure_admin("admin", "adminpassword");
+      std::get<std::unique_ptr<algorithm_trainer::PostgreSQLAuthService>>(std::move(auth_result));
+  const auto *admin_username = std::getenv("ALGORITHM_TRAINER_ADMIN_USERNAME");
+  const auto *admin_password = std::getenv("ALGORITHM_TRAINER_ADMIN_PASSWORD");
+  if (admin_username == nullptr || admin_password == nullptr) {
+    LOG_ERROR
+        << "ALGORITHM_TRAINER_ADMIN_USERNAME and ALGORITHM_TRAINER_ADMIN_PASSWORD are required";
+    return 1;
+  }
+  auto admin_result = auth_service->ensure_admin(admin_username, admin_password);
   if (const auto *error = std::get_if<algorithm_trainer::AuthError>(&admin_result)) {
     LOG_ERROR << "Admin account initialization failed: " << error->message;
     return 1;

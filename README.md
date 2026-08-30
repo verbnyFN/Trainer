@@ -2,8 +2,8 @@
 
 Algorithm Trainer is a small full-stack application for solving programming problems. The current
 MVP presents an A+B problem in a React/Monaco interface, submits Python solutions to a C++/Drogon
-backend, runs them in an NsJail sandbox against hidden cases, and stores submission results in
-SQLite.
+backend, runs them in an NsJail sandbox against hidden cases, and stores application data in
+PostgreSQL.
 
 Supported verdicts are Accepted, Wrong Answer, Runtime Error, and Time Limit Exceeded.
 
@@ -15,7 +15,7 @@ Supported verdicts are Accepted, Wrong Answer, Runtime Error, and Time Limit Exc
 - seccomp-BPF support
 
 All build and runtime dependencies are pinned by `flake.lock`; no global NsJail, Python, C++, Node.js,
-or SQLite installation is required.
+or PostgreSQL installation is required outside the development shell.
 
 ## Build and test
 
@@ -34,29 +34,26 @@ policy or restricted container may prevent those tests from running.
 
 ## Run locally
 
-Build the project first, then start the backend and frontend in separate terminals.
-
-Terminal 1:
+Build the project, then start the database, backend, and frontend together with one command:
 
 ```bash
-nix develop --command ./build/backend/algorithm-trainer-backend
+nix develop --command ./scripts/local-app start
 ```
 
-Terminal 2:
+Open <http://127.0.0.1:5173>. Stop the frontend, backend, and database completely with:
 
 ```bash
-nix develop --command pnpm --dir frontend dev --host 127.0.0.1
+nix develop --command ./scripts/local-app stop
 ```
 
-Open <http://127.0.0.1:5173>. Vite proxies `/api` requests to the backend at
-`http://127.0.0.1:8080`.
+`scripts/local-app status` reports all three components and `scripts/local-app restart` restarts the
+complete application. Vite proxies `/api` requests to the backend at `http://127.0.0.1:8080`.
 
-The backend creates `data/algorithm-trainer.sqlite3` by default. To choose another database file:
-
-```bash
-ALGORITHM_TRAINER_DATABASE=/absolute/path/to/database.sqlite3 \
-  nix develop --command ./build/backend/algorithm-trainer-backend
-```
+The local launcher initializes a private PostgreSQL cluster under ignored `data/`, starts it on a
+Unix socket without TCP access, backs up and transfers the legacy SQLite database once, and generates
+local administrator credentials in `data/local-postgresql.env` with mode 600. See
+[`docs/database.md`](docs/database.md) for production
+PostgreSQL setup, backup, transfer, verification, and rollback instructions.
 
 When the backend is served over HTTPS, set `ALGORITHM_TRAINER_SECURE_COOKIES=1` so authentication
 cookies carry the `Secure` attribute. Leave it unset only for plain-HTTP local development.
@@ -90,7 +87,8 @@ Hidden test cases and sandbox diagnostics are never returned through the API.
 
 - `frontend/`: React, TypeScript, Vite, and Monaco Editor
 - `backend/`: C++20 Drogon API, judge logic, executor abstraction, and Catch2 tests
-- `migrations/`: versioned SQLite schema migrations
+- `migrations/postgresql/`: production PostgreSQL schema migrations
+- `migrations/001-*.sql` through `008-*.sql`: legacy SQLite migrations retained for transfer tests
 - `docs/database.md`: submission persistence details
 - `docs/sandbox.md`: isolation model, exact limits, host requirements, and known limitations
 

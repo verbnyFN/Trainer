@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ ! -x "$project_root/build/backend/algorithm-trainer-backend" ]]; then
+  echo "Build the backend first with: cmake --build build" >&2
+  exit 1
+fi
+
+"$project_root/scripts/local-postgresql" setup
+source "$project_root/data/local-postgresql.env"
+exec "$project_root/build/backend/algorithm-trainer-backend"

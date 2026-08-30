@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+postgres_data="$project_root/data/postgresql"
+postgres_socket="$project_root/data/postgresql-socket"
+postgres_log="$project_root/data/postgresql.log"
+environment_file="$project_root/data/local-postgresql.env"
+database_name="algorithm_trainer"
+postgres_port="55432"
+connection_info="host=$postgres_socket port=$postgres_port dbname=$database_name"
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "$1 is unavailable. Run this command inside 'nix develop'." >&2
+    exit 1
+  fi
+}
+
+is_running() {
+  [[ -f "$postgres_data/PG_VERSION" ]] && pg_ctl -D "$postgres_data" status >/dev/null 2>&1
+}
+
+start_database() {
+  mkdir -p "$postgres_socket"
+  chmod 700 "$postgres_socket"
+  if ! is_running; then
+    pg_ctl -D "$postgres_data" -l "$postgres_log" \
+      -o "-k $postgres_socket -p $postgres_port -c listen_addresses=''" start
+  fi
+}
+
+create_environment() {
+  if [[ -f "$environment_file" ]]; then
+    return
+  fi
+  local generated_password
+  generated_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+  umask 077
+  {
+    printf "export ALGORITHM_TRAINER_DATABASE_URL='%s'\n" "$connection_info"
+    printf "export ALGORITHM_TRAINER_ADMIN_USERNAME='admin'\n"
+    printf "export ALGORITHM_TRAINER_ADMIN_PASSWORD='%s'\n" "$generated_password"
+  } > "$environment_file"
+  echo "Local administrator credentials were written to data/local-postgresql.env (mode 600)."
+}
+
+setup_database() {
+  require_command initdb
+  require_command pg_ctl
+  require_command createdb
+  require_command psql
+  mkdir -p "$project_root/data"
+  if [[ ! -f "$postgres_data/PG_VERSION" ]]; then
+    initdb -D "$postgres_data" --no-locale --encoding=UTF8 --auth-local=trust \
+      --auth-host=scram-sha-256
+  fi
+  start_database
+  if ! psql -h "$postgres_socket" -p "$postgres_port" -d postgres -Atqc \
+      "SELECT 1 FROM pg_database WHERE datname='$database_name'" | grep -qx 1; then
+    createdb -h "$postgres_socket" -p "$postgres_port" "$database_name"
+  fi
+  if [[ "$(psql -h "$postgres_socket" -p "$postgres_port" -d "$database_name" -Atqc \
+      "SELECT to_regclass('public.users') IS NOT NULL")" != "t" ]]; then
+    psql -h "$postgres_socket" -p "$postgres_port" -d "$database_name" \
+      -v ON_ERROR_STOP=1 -f "$project_root/migrations/postgresql/001-initial-schema.sql" >/dev/null
+  fi
+
+  local existing_rows
+  existing_rows="$(psql -h "$postgres_socket" -p "$postgres_port" -d "$database_name" -Atqc \
+    "SELECT (SELECT count(*) FROM users)+(SELECT count(*) FROM problems)+(SELECT count(*) FROM submissions)+(SELECT count(*) FROM sessions)+(SELECT count(*) FROM admin_audit_log)")"
+  if [[ "$existing_rows" == "0" && -f "$project_root/data/algorithm-trainer.sqlite3" ]]; then
+    if [[ ! -x "$project_root/build/backend/algorithm-trainer-migrate-sqlite" ]]; then
+      echo "Build algorithm-trainer-migrate-sqlite before transferring SQLite." >&2
+      exit 1
+    fi
+    if [[ ! -f "$project_root/data/algorithm-trainer.sqlite3.pre-postgresql" ]]; then
+      cp -p "$project_root/data/algorithm-trainer.sqlite3" \
+        "$project_root/data/algorithm-trainer.sqlite3.pre-postgresql"
+    fi
+    "$project_root/build/backend/algorithm-trainer-migrate-sqlite" \
+      "$project_root/data/algorithm-trainer.sqlite3" "$connection_info"
+  fi
+  create_environment
+  echo "Local PostgreSQL is ready on its private Unix socket."
+}
+
+case "${1:-setup}" in
+  setup)
+    setup_database
+    ;;
+  start)
+    require_command pg_ctl
+    if [[ ! -f "$postgres_data/PG_VERSION" ]]; then
+      echo "Local PostgreSQL is not initialized. Run: scripts/local-postgresql setup" >&2
+      exit 1
+    fi
+    start_database
+    ;;
+  stop)
+    require_command pg_ctl
+    if is_running; then
+      pg_ctl -D "$postgres_data" stop -m fast
+    else
+      echo "Local PostgreSQL is already stopped."
+    fi
+    ;;
+  status)
+    require_command pg_ctl
+    if is_running; then
+      echo "Local PostgreSQL is running."
+    else
+      echo "Local PostgreSQL is stopped."
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Usage: scripts/local-postgresql [setup|start|stop|status]" >&2
+    exit 2
+    ;;
+esac
