@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+environment_file="$project_root/data/container.env"
+runtime_directory="$project_root/data/run"
+backend_pid_file="$runtime_directory/container-backend.pid"
+backend_log="$project_root/data/container-backend.log"
+backend_binary="$project_root/build/backend/algorithm-trainer-backend"
+
+compose() {
+  docker compose --project-directory "$project_root" --env-file "$environment_file" "$@"
+}
+
+require_secure_host() {
+  [[ "$(uname -s)" == "Linux" ]] || {
+    echo "Secure code judging requires a native Linux host; Docker Desktop VMs are unsupported." >&2
+    exit 1
+  }
+  [[ -e /sys/fs/cgroup/cgroup.controllers ]] || {
+    echo "Secure code judging requires cgroup v2." >&2
+    exit 1
+  }
+  command -v docker >/dev/null || {
+    echo "Docker with the Compose plugin is required." >&2
+    exit 1
+  }
+  command -v nix >/dev/null || {
+    echo "Nix with flakes is required to build the hardened backend reproducibly." >&2
+    exit 1
+  }
+  command -v systemd-run >/dev/null || {
+    echo "A systemd user session is required for cgroup delegation." >&2
+    exit 1
+  }
+}
+
+create_environment() {
+  if [[ -f "$environment_file" ]]; then
+    return
+  fi
+  mkdir -p "$project_root/data"
+  umask 077
+  local postgres_password admin_password
+  postgres_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+  admin_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+  {
+    printf 'ALGORITHM_TRAINER_POSTGRES_PASSWORD=%s\n' "$postgres_password"
+    printf 'ALGORITHM_TRAINER_POSTGRES_PORT=54329\n'
+    printf 'ALGORITHM_TRAINER_ADMIN_USERNAME=admin\n'
+    printf 'ALGORITHM_TRAINER_ADMIN_PASSWORD=%s\n' "$admin_password"
+  } >"$environment_file"
+  echo "Generated private credentials in data/container.env"
+}
+
+load_environment() {
+  set -a
+  # shellcheck disable=SC1090
+  source "$environment_file"
+  set +a
+}
+
+backend_running() {
+  [[ -f "$backend_pid_file" ]] || return 1
+  local pid
+  pid="$(<"$backend_pid_file")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o args= 2>/dev/null | grep -Fq "$backend_binary"
+}
+
+stop_backend() {
+  if ! backend_running; then
+    rm -f "$backend_pid_file"
+    return
+  fi
+  local pid
+  pid="$(<"$backend_pid_file")"
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  for _ in {1..50}; do
+    backend_running || break
+    sleep 0.1
+  done
+  backend_running && kill -KILL -- "-$pid" 2>/dev/null || true
+  rm -f "$backend_pid_file"
+}
+
+wait_for_backend() {
+  for _ in {1..100}; do
+    if curl --silent --fail --output /dev/null http://127.0.0.1:8080/api/problems; then
+      return
+    fi
+    backend_running || {
+      echo "Backend stopped during startup; see data/container-backend.log." >&2
+      return 1
+    }
+    sleep 0.1
+  done
+  echo "Backend did not become ready; see data/container-backend.log." >&2
+  return 1
+}
+
+start() {
+  require_secure_host
+  create_environment
+  load_environment
+  nix develop "$project_root" --command cmake -S "$project_root" -B "$project_root/build" -G Ninja -DBUILD_TESTING=OFF
+  nix develop "$project_root" --command cmake --build "$project_root/build"
+  compose up --detach --build --wait database
+
+  mkdir -p "$runtime_directory"
+  stop_backend
+  export ALGORITHM_TRAINER_DATABASE_URL="postgresql://algorithm_trainer:${ALGORITHM_TRAINER_POSTGRES_PASSWORD}@127.0.0.1:${ALGORITHM_TRAINER_POSTGRES_PORT}/algorithm_trainer"
+  setsid systemd-run --user --scope --quiet --property=Delegate=yes \
+    "$backend_binary" >>"$backend_log" 2>&1 </dev/null &
+  printf '%s\n' "$!" >"$backend_pid_file"
+  wait_for_backend
+  compose up --detach --build --wait frontend
+  echo "Algorithm Trainer is running at http://127.0.0.1:5173"
+  echo "Administrator credentials: data/container.env"
+}
+
+stop() {
+  create_environment
+  stop_backend
+  compose down
+  echo "Algorithm Trainer stopped. PostgreSQL data was preserved."
+}
+
+status() {
+  create_environment
+  local failed=0
+  if backend_running; then echo "Hardened backend/judge: running"; else echo "Hardened backend/judge: stopped"; failed=1; fi
+  compose ps || failed=1
+  return "$failed"
+}
+
+case "${1:-start}" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status) status ;;
+  logs)
+    create_environment
+    compose logs --follow
+    ;;
+  *)
+    echo "Usage: scripts/container-app [start|stop|restart|status|logs]" >&2
+    exit 2
+    ;;
+esac

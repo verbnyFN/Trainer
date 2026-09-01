@@ -1,0 +1,40 @@
+name: algorithm-trainer
+
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: algorithm_trainer
+      POSTGRES_USER: algorithm_trainer
+      POSTGRES_PASSWORD: ${ALGORITHM_TRAINER_POSTGRES_PASSWORD:?set in data/container.env}
+    ports:
+      - "127.0.0.1:${ALGORITHM_TRAINER_POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U algorithm_trainer -d algorithm_trainer"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deployment/frontend.Dockerfile
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=16m,uid=101,gid=101
+      - /var/run:size=1m,uid=101,gid=101
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  postgresql-data:

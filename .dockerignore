@@ -1,0 +1,7 @@
+.git
+.agents
+.codex
+build
+data
+frontend/dist
+frontend/node_modules
